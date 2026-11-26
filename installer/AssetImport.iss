@@ -282,7 +282,7 @@ begin
     except
       AssetImportError := True;
       Log('HD asset import failed: ' + GetExceptionMessage);
-      MsgBox(GetExceptionMessage, mbError, MB_OK);
+      SuppressibleMsgBox(GetExceptionMessage, mbError, MB_OK, IDOK);
     end;
 end;
 

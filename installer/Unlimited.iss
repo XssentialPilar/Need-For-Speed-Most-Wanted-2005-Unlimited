@@ -25,10 +25,11 @@ RestartApplications=no
 Uninstallable=no
 #ifdef LocalHudPayload
 OutputBaseFilename=NFSMW-Unlimited-Local-HD-Setup
+Compression=lzma2/fast
 #else
 OutputBaseFilename=NFSMW-Unlimited-Setup
-#endif
 Compression=lzma2/max
+#endif
 SolidCompression=yes
 WizardStyle=modern
 
@@ -98,7 +99,7 @@ begin
     ErrorText := GameError(WizardDirValue);
     Result := ErrorText = '';
     if not Result then
-      MsgBox(ErrorText, mbError, MB_OK);
+      SuppressibleMsgBox(ErrorText, mbError, MB_OK, IDOK);
   end;
 end;
 
