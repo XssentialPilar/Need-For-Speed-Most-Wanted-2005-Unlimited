@@ -1,0 +1,12 @@
+/Juego/
+/Respaldo antes de Upscaled HUD/
+/dist/
+*.dll
+*.exe
+*.dll.before-*
+*.dmp
+*.log
+*.ppm
+*.obj
+*.o
+/.vs/

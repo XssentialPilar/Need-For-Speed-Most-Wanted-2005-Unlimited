@@ -1,0 +1,318 @@
+#pragma once
+
+namespace {
+
+struct HudPoint {
+    float x = 0;
+    float y = 0;
+};
+
+struct HudBounds {
+    float left = INFINITY;
+    float top = INFINITY;
+    float right = -INFINITY;
+    float bottom = -INFINITY;
+
+    bool Valid() const { return left < right && top < bottom; }
+};
+
+constexpr float HudTravel(float scale, float halfCanvas = 320.0f) {
+    return scale >= 1.0f ? 0.0f : 0.85f * std::min(2.0f * halfCanvas, halfCanvas / scale - halfCanvas);
+}
+
+constexpr float FitHudAxis(float low, float high, float scale, float halfCanvas, float preferred) {
+    const float halfViewport = halfCanvas / scale;
+    const float margin = std::min(0.04f * halfViewport, 0.10f * halfCanvas);
+    const float limit = halfViewport - margin;
+    const float minimum = -limit - low;
+    const float maximum = limit - high;
+    return minimum <= maximum ? std::clamp(preferred, minimum, maximum) : -(low + high) * 0.5f;
+}
+
+template<class T>
+T& HudField(void* object, unsigned offset) {
+    return *reinterpret_cast<T*>(static_cast<std::uint8_t*>(object) + offset);
+}
+
+void* FindHudObject(const char* package, std::uint32_t hash) {
+    return GameFunction<void* (__cdecl*)(const char*, std::uint32_t)>(0x124850)(package, hash);
+}
+
+void* FindHudChild(void* group, std::uint32_t hash) {
+    constexpr unsigned typeGroup = 5;
+    if (!group || HudField<unsigned>(group, 0x18) != typeGroup) return nullptr;
+    auto* child = HudField<void*>(group, 0x64);
+    for (unsigned i = 0, count = std::min(HudField<unsigned>(group, 0x60), 512U); child && i < count; ++i) {
+        if (HudField<std::uint32_t>(child, 0x10) == hash) return child;
+        child = HudField<void*>(child, 4);
+    }
+    return nullptr;
+}
+
+HudPoint ReadHudPosition(void* object) {
+    if (!object) return {};
+    auto* data = HudField<void*>(object, 0x2c);
+    if (!data) return {};
+    return {HudField<float>(data, 0x1c), HudField<float>(data, 0x20)};
+}
+
+HudPoint AddHudPoints(HudPoint first, HudPoint second) {
+    return {first.x + second.x, first.y + second.y};
+}
+
+void MarkHudTransformDirty(void* object) {
+    HudField<unsigned>(object, 0x1c) |= (1U << 24) | (1U << 25);
+}
+
+void MeasureHudBounds(void* object, HudPoint parent, unsigned depth, unsigned& remaining, HudBounds& bounds) {
+    if (!object || depth > 12 || !remaining) return;
+    --remaining;
+    auto* data = HudField<void*>(object, 0x2c);
+    if (!data || (HudField<unsigned>(object, 0x1c) & 1U) || !HudField<int>(data, 0xc)) return;
+
+    const unsigned type = HudField<unsigned>(object, 0x18);
+    if (type == 5) {
+        const auto origin = AddHudPoints(parent, ReadHudPosition(object));
+        auto* child = HudField<void*>(object, 0x64);
+        for (unsigned i = 0, count = HudField<unsigned>(object, 0x60); child && i < count && remaining; ++i) {
+            MeasureHudBounds(child, origin, depth + 1, remaining, bounds);
+            child = HudField<void*>(child, 4);
+        }
+        return;
+    }
+
+    // FEng measures rendered text with its current font and justification.
+    // Image dimensions can be negative when art is mirrored.
+    if (type != 1 && type != 2 && type != 7 && type != 9 && type != 12) return;
+    using Corner = void (__cdecl*)(void*, float*, float*);
+    HudPoint first{}, last{};
+    GameFunction<Corner>(0x114fd0)(object, &first.x, &first.y);
+    GameFunction<Corner>(0x115140)(object, &last.x, &last.y);
+    if (!std::isfinite(first.x) || !std::isfinite(first.y) ||
+        !std::isfinite(last.x) || !std::isfinite(last.y) || first.x == last.x || first.y == last.y) return;
+    bounds.left = std::min(bounds.left, parent.x + std::min(first.x, last.x));
+    bounds.right = std::max(bounds.right, parent.x + std::max(first.x, last.x));
+    bounds.top = std::min(bounds.top, parent.y + std::min(first.y, last.y));
+    bounds.bottom = std::max(bounds.bottom, parent.y + std::max(first.y, last.y));
+}
+
+struct HudGroupPosition {
+    void* object = nullptr;
+    HudPoint applied{};
+    HudPoint expected{};
+};
+
+HudPoint HudPositionWithoutOffset(HudGroupPosition& anchor, void* object) {
+    if (object != anchor.object) anchor = {object};
+    const auto position = ReadHudPosition(object);
+    return {
+        position.x - (std::fabs(position.x - anchor.expected.x) < 0.01f ? anchor.applied.x : 0.0f),
+        position.y - (std::fabs(position.y - anchor.expected.y) < 0.01f ? anchor.applied.y : 0.0f)
+    };
+}
+
+void SetHudGroupOffset(HudGroupPosition& anchor, void* object, HudPoint offset) {
+    const auto base = HudPositionWithoutOffset(anchor, object);
+    if (!object || !std::isfinite(base.x) || !std::isfinite(base.y)) return;
+    auto* data = HudField<void*>(object, 0x2c);
+    if (!data) return;
+    anchor.applied = offset;
+    anchor.expected = AddHudPoints(base, offset);
+    if (std::fabs(anchor.expected.x - HudField<float>(data, 0x1c)) >= 0.01f ||
+        std::fabs(anchor.expected.y - HudField<float>(data, 0x20)) >= 0.01f) {
+        HudField<float>(data, 0x1c) = anchor.expected.x;
+        HudField<float>(data, 0x20) = anchor.expected.y;
+        MarkHudTransformDirty(object);
+    }
+}
+
+// Use the actual viewport in FEng's centered coordinates. One margin
+// measured on the short axis keeps equal pixel padding on both edges.
+constexpr HudPoint HudCornerOffset(const HudBounds& bounds, float scaleX, float scaleY, bool right) {
+    const float halfWidth = 320.0f / scaleX;
+    const float halfHeight = 240.0f / scaleY;
+    const float margin = 0.05f * std::min(halfWidth, halfHeight);
+    return {
+        right ? halfWidth - margin - bounds.right : -halfWidth + margin - bounds.left,
+        halfHeight - margin - bounds.bottom
+    };
+}
+
+template<std::size_t N>
+class HudCorner {
+public:
+    // Remove our translation before measuring the shared parent. The parent
+    // also contains unrelated race information and still uses its stock layout.
+    void FindChildren(void* group, const std::uint32_t (&hashes)[N]) {
+        for (std::size_t i = 0; i < N; ++i) {
+            objects[i] = FindHudChild(group, hashes[i]);
+            SetHudGroupOffset(positions[i], objects[i], {});
+        }
+    }
+
+    void Align(HudPoint origin, bool right) {
+        HudBounds bounds{};
+        unsigned remaining = 512;
+        for (auto* object : objects) MeasureHudBounds(object, origin, 0, remaining, bounds);
+        if (!bounds.Valid()) return;
+        const auto offset = HudCornerOffset(bounds, activeLayout.hudX, activeLayout.hudY, right);
+        for (std::size_t i = 0; i < N; ++i) SetHudGroupOffset(positions[i], objects[i], offset);
+    }
+
+private:
+    std::array<void*, N> objects{};
+    std::array<HudGroupPosition, N> positions{};
+};
+
+void AnchorHudGroup(HudGroupPosition& anchor, void* object, HudPoint origin, HudPoint preferred,
+                    bool horizontal, bool vertical) {
+    if (!object) {
+        anchor = {};
+        return;
+    }
+    if (object != anchor.object) anchor = {object};
+    HudBounds bounds{};
+    unsigned remaining = 512;
+    MeasureHudBounds(object, origin, 0, remaining, bounds);
+    if (!bounds.Valid()) return;
+    const auto position = ReadHudPosition(object);
+    if (!std::isfinite(position.x) || !std::isfinite(position.y)) return;
+    const auto priorX = std::fabs(position.x - anchor.expected.x) < 0.01f ? anchor.applied.x : 0.0f;
+    const auto priorY = std::fabs(position.y - anchor.expected.y) < 0.01f ? anchor.applied.y : 0.0f;
+    const auto x = horizontal ? FitHudAxis(bounds.left - priorX, bounds.right - priorX,
+                                          activeLayout.hudX, 320.0f, preferred.x) : 0.0f;
+    const auto y = vertical ? FitHudAxis(bounds.top - priorY, bounds.bottom - priorY,
+                                        activeLayout.hudY, 240.0f, preferred.y) : 0.0f;
+    anchor.applied = {x, y};
+    anchor.expected = {position.x - priorX + x, position.y - priorY + y};
+    if (std::fabs(anchor.expected.x - position.x) >= 0.01f || std::fabs(anchor.expected.y - position.y) >= 0.01f) {
+        // The public SetCenter writes every script's position key. Apply the
+        // aspect offset to the rendered transform only.
+        auto* data = HudField<void*>(object, 0x2c);
+        HudField<float>(data, 0x1c) = anchor.expected.x;
+        HudField<float>(data, 0x20) = anchor.expected.y;
+        MarkHudTransformDirty(object);
+    }
+}
+
+bool ShiftMinimap(void* map, HudPoint delta) {
+    if (!map) return false;
+    constexpr unsigned offsets[] = {0x3c, 0x40, 0x44, 0x48, 0x90};
+    std::array<void*, std::size(offsets)> nodes{};
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        nodes[i] = HudField<void*>(map, offsets[i]);
+        if (!nodes[i] || !HudField<void*>(nodes[i], 0x2c)) return false;
+    }
+    // X follows the stock widescreen path. The Y offset belongs to the map's
+    // default position because SetupMinimap reconstructs its layout every frame.
+    HudField<float>(map, 0xb8) += delta.x;
+    HudField<float>(map, 0xbc) += delta.y;
+    HudField<float>(map, 0xa0) += delta.y;
+    for (auto* node : nodes) {
+        auto* data = HudField<void*>(node, 0x2c);
+        HudField<float>(data, 0x1c) += delta.x;
+        MarkHudTransformDirty(node);
+    }
+    HudField<float>(HudField<void*>(nodes.back(), 0x2c), 0x20) += delta.y;
+    GameValue<float>(0x51cf04) += delta.x;
+    return true;
+}
+
+void (*captureHudInstruments)(std::uint8_t*) = nullptr;
+
+void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
+    const auto previousMode = hud[0x330];
+    auto* map = HudField<void*>(hud, 0x320);
+    GameFunction<void (__thiscall*)(void*)>(0x1696c0)(hud);
+    const auto* package = HudField<const char*>(hud, 0x24);
+    if (!package || GameValue<std::uint32_t>(gameFlowStateRva) != 6) return;
+    if (captureHudInstruments) captureHudInstruments(hud);
+
+    static std::uint8_t* previousHud = nullptr;
+    static void* previousMap = nullptr;
+    static float previousScaleX = 0, previousScaleY = 0;
+    static float mapOffset = 0;
+    static std::array<HudGroupPosition, 20> anchors{};
+    constexpr std::uint32_t mapWidgets[] = {
+        0x382d2fc9, 0xc46a80a9, 0xb0f63386, // Ring, pursuit heat and its counter.
+        0x87c38e97, 0xedfb6d37 // Left tachometer and needle in drag events.
+    };
+    constexpr std::uint32_t speedWidgets[] = {
+        0x5164d4ea, 0x941fff09, 0x87c38e97, 0xc5d551b7, 0x8991bd54, // Gauge groups.
+        0xedfb6d37, 0x5df2f5b4 // Needles drawn as separate siblings.
+    };
+    static HudCorner<std::size(mapWidgets)> mapCorner;
+    static std::array<HudCorner<std::size(speedWidgets)>, 2> speedCorners;
+    static HudCorner<1> dragCorner;
+    static unsigned updates = 0;
+    static unsigned settlingFrames = 0;
+    const bool newHud = previousHud != hud || previousMap != map;
+    const bool modeChanged = previousMode != hud[0x330];
+    const bool changed = newHud || modeChanged || previousScaleX != activeLayout.hudX || previousScaleY != activeLayout.hudY;
+    // A native widescreen message changes object positions after this update.
+    if (changed) settlingFrames = 3;
+    if (settlingFrames) --settlingFrames;
+    else if (++updates % 8 != 0) return;
+    if (newHud) {
+        anchors = {};
+        mapCorner = {};
+        speedCorners = {};
+        dragCorner = {};
+        mapOffset = 0;
+    }
+    previousHud = hud;
+    previousMap = map;
+    previousScaleX = activeLayout.hudX;
+    previousScaleY = activeLayout.hudY;
+
+    auto* leftRoot = FindHudObject(package, 0x157c5b37);
+    auto* left = FindHudChild(leftRoot, 0x1603009e);
+    auto* right = FindHudObject(package, 0x5d0101f1);
+    auto* alternateRight = FindHudObject(package, 0x2fe4ff9c);
+    auto* ring = FindHudChild(left, 0x382d2fc9);
+    const std::array<void*, 2> rightRoots{right, alternateRight};
+    std::array<void*, 2> rightContent{};
+    mapCorner.FindChildren(left, mapWidgets);
+    for (std::size_t i = 0; i < rightRoots.size(); ++i) {
+        rightContent[i] = FindHudChild(rightRoots[i], 0x5c7a5c8a);
+        speedCorners[i].FindChildren(rightContent[i], speedWidgets);
+    }
+    constexpr std::uint32_t dragWidgets[] = {0x87c38e97};
+    dragCorner.FindChildren(right, dragWidgets);
+    const auto leftOrigin = ReadHudPosition(leftRoot);
+    const auto x = HudTravel(activeLayout.hudX);
+    const auto y = HudTravel(activeLayout.hudY, 240.0f);
+    AnchorHudGroup(anchors[0], left, leftOrigin, {-x, 0}, true, false);
+    AnchorHudGroup(anchors[1], right, {}, {x, 0}, true, false);
+    AnchorHudGroup(anchors[2], alternateRight, {}, {x, 0}, true, false);
+
+    const auto leftContent = AddHudPoints(leftOrigin, ReadHudPosition(left));
+    AnchorHudGroup(anchors[6], FindHudChild(left, 0x3345911d), leftContent, {0, -y}, false, true);
+    mapCorner.Align(leftContent, false);
+    for (std::size_t i = 0; i < rightRoots.size(); ++i) {
+        void* content = rightContent[i];
+        const auto origin = AddHudPoints(ReadHudPosition(rightRoots[i]), ReadHudPosition(content));
+        AnchorHudGroup(anchors[7 + i], FindHudChild(content, 0xb1c5ed0d), origin, {0, -y}, false, true);
+        speedCorners[i].Align(origin, true);
+    }
+    dragCorner.Align(ReadHudPosition(right), true);
+    AnchorHudGroup(anchors.back(), FindHudObject(package, 0x7fac287b), {}, {0, -y}, false, true);
+
+    // Native widescreen resets the global X pivot before its script moves the
+    // backdrop. Preserve the prior patch offset while the script catches up.
+    if (map && ring) {
+        if (modeChanged) GameValue<float>(0x51cf04) += mapOffset;
+        const auto center = AddHudPoints(leftContent, ReadHudPosition(ring));
+        const HudPoint delta{center.x - HudField<float>(map, 0xb8), center.y - HudField<float>(map, 0xbc)};
+        if (std::isfinite(delta.x) && std::isfinite(delta.y) &&
+            (std::fabs(delta.x) > 0.02f || std::fabs(delta.y) > 0.02f) && ShiftMinimap(map, delta)) {
+            mapOffset += delta.x;
+        }
+    }
+}
+
+bool InstallResponsiveRaceHud() {
+    return RedirectCall(0x18cad2, 0x1696c0, reinterpret_cast<std::uintptr_t>(&LayoutRaceHud));
+}
+
+} // namespace
