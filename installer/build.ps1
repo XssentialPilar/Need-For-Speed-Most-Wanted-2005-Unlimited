@@ -2,11 +2,22 @@ param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\dist'),
     [string]$Compiler = (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
     [string]$LegacyUcrt = (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Redist\10.0.19041.0\ucrt\DLLs\x86'),
-    [string]$HudGameDirectory
+    [string]$HudGameDirectory,
+    [switch]$RuntimeOnly
 )
 
 $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot
+if ($RuntimeOnly -and $HudGameDirectory) {
+    throw 'Use either -RuntimeOnly or -HudGameDirectory.'
+}
+if (-not $RuntimeOnly -and -not $HudGameDirectory) {
+    $HudGameDirectory = Join-Path $project 'Juego'
+}
+if (-not $RuntimeOnly -and -not (Test-Path -LiteralPath $HudGameDirectory -PathType Container)) {
+    throw 'The complete installer requires a verified HD game folder. Set -HudGameDirectory to that folder.'
+}
+
 $scratchRoot = (Resolve-Path -LiteralPath ([IO.Path]::GetTempPath())).Path
 $stage = Join-Path $scratchRoot ('unlimited-installer-' + [Guid]::NewGuid().ToString('N'))
 $output = [IO.Path]::GetFullPath($OutputDirectory)
@@ -22,7 +33,10 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $LegacyUcrt 'ucrtbase.dll') -PathType Leaf)) { throw "Missing the Windows SDK x86 UCRT redistributable: $LegacyUcrt" }
     $defines = @("/DBuildPayload=$stage", "/DLegacyUcrt=$LegacyUcrt")
     $filename = 'NFSMW-Unlimited-Setup.exe'
-    if ($HudGameDirectory) {
+    if ($RuntimeOnly) {
+        $defines += '/DRuntimeOnlyBuild'
+        $filename = 'NFSMW-Unlimited-Runtime-Setup.exe'
+    } else {
         $sourceRoot = (Resolve-Path -LiteralPath $HudGameDirectory).Path
         $manifestPath = Join-Path $PSScriptRoot 'upscaled-hud-checksums.tsv'
         $manifest = Import-Csv -LiteralPath $manifestPath -Delimiter "`t" -Header Relative, Original, HD
@@ -41,10 +55,10 @@ try {
                 'Source: "{0}"; Flags: dontcopy' -f $target
             }
         }
-        $include = Join-Path $stage 'LocalHudPayload.iss'
+        if (-not $staged.Count) { throw 'The HD payload is empty.' }
+        $include = Join-Path $stage 'EmbeddedHudPayload.iss'
         [IO.File]::WriteAllLines($include, [string[]]$entries, [Text.UTF8Encoding]::new($true))
-        $defines += "/DLocalHudPayload=$include"
-        $filename = 'NFSMW-Unlimited-Local-HD-Setup.exe'
+        $defines += "/DEmbeddedHudPayload=$include"
     }
     & $Compiler @defines "/O$output" (Join-Path $PSScriptRoot 'Unlimited.iss')
     if ($LASTEXITCODE) { throw "Inno Setup compilation failed ($LASTEXITCODE)" }

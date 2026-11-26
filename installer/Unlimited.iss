@@ -1,6 +1,9 @@
 #ifndef BuildPayload
   #error BuildPayload must point to the staged game and setup DLLs.
 #endif
+#if !Defined(EmbeddedHudPayload) && !Defined(RuntimeOnlyBuild)
+  #error The standard installer requires an embedded HD payload.
+#endif
 
 [Setup]
 AppId=NFSMW-Unlimited
@@ -23,12 +26,14 @@ PrivilegesRequiredOverridesAllowed=commandline
 CloseApplications=no
 RestartApplications=no
 Uninstallable=no
-#ifdef LocalHudPayload
-OutputBaseFilename=NFSMW-Unlimited-Local-HD-Setup
-Compression=lzma2/fast
+#ifdef RuntimeOnlyBuild
+OutputBaseFilename=NFSMW-Unlimited-Runtime-Setup
+VersionInfoDescription=Unlimited Runtime Setup
+Compression=lzma2/max
 #else
 OutputBaseFilename=NFSMW-Unlimited-Setup
-Compression=lzma2/max
+VersionInfoDescription=Unlimited Setup with HD Interface
+Compression=lzma2/fast
 #endif
 SolidCompression=yes
 WizardStyle=modern
@@ -52,8 +57,8 @@ Name: "da"; MessagesFile: "compiler:Languages\Danish.isl"
 [Files]
 Source: "{#BuildPayload}\unlimited-setup-private.dll"; Flags: dontcopy
 Source: "upscaled-hud-checksums.tsv"; Flags: dontcopy
-#ifdef LocalHudPayload
-#include LocalHudPayload
+#ifdef EmbeddedHudPayload
+#include EmbeddedHudPayload
 #endif
 Source: "{#BuildPayload}\d3d9.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('d3d9.dll')
 Source: "..\third-party\controllers\dinput8.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('dinput8.dll')

@@ -39,13 +39,17 @@ var
   Browse: TNewButton;
   Top, I: Integer;
 begin
+  #ifdef EmbeddedHudPayload
+  AssetPage := CreateCustomPage(wpSelectDir, CustomMessage('AssetTitle'), CustomMessage('EmbeddedHud'));
+  #else
   AssetPage := CreateCustomPage(wpSelectDir, CustomMessage('AssetTitle'), CustomMessage('AssetSubtitle'));
+  #endif
   Instructions := TNewStaticText.Create(AssetPage);
   Instructions.Parent := AssetPage.Surface;
   Instructions.AutoSize := False;
   Instructions.Width := AssetPage.SurfaceWidth;
   Instructions.WordWrap := True;
-  #ifdef LocalHudPayload
+  #ifdef EmbeddedHudPayload
   Instructions.Caption := CustomMessage('EmbeddedHudInstructions');
   #else
   Instructions.Caption := CustomMessage('AssetInstructions');
@@ -54,6 +58,9 @@ begin
   Top := Instructions.Height + ScaleY(12);
 
   for I := 0 to 1 do begin
+    #ifdef EmbeddedHudPayload
+    if I = 0 then Continue;
+    #endif
     LabelText := TNewStaticText.Create(AssetPage);
     LabelText.Parent := AssetPage.Surface;
     LabelText.Top := Top;
@@ -66,21 +73,16 @@ begin
     Browse.SetBounds(AssetPage.SurfaceWidth - ScaleX(96), Top, ScaleX(96), ScaleY(24));
     Browse.Tag := I;
     Browse.OnClick := @BrowseAssetFolder;
-    #ifdef LocalHudPayload
-    if I = 0 then Browse.Enabled := False;
-    #endif
     AssetEdits[I] := TNewEdit.Create(AssetPage);
     AssetEdits[I].Parent := AssetPage.Surface;
     AssetEdits[I].SetBounds(0, Top + ScaleY(1), Browse.Left - ScaleX(8), ScaleY(22));
     LabelText.FocusControl := AssetEdits[I];
     Top := Top + ScaleY(36);
   end;
+  #ifndef EmbeddedHudPayload
   AssetEdits[0].Text := ExpandConstant('{param:HDHUD|}');
-  AssetEdits[1].Text := ExpandConstant('{param:HDMOVIES|}');
-  #ifdef LocalHudPayload
-  AssetEdits[0].Enabled := False;
-  AssetEdits[0].Text := CustomMessage('EmbeddedHud');
   #endif
+  AssetEdits[1].Text := ExpandConstant('{param:HDMOVIES|}');
 end;
 
 function AssetDigest(Path: string): string;
@@ -106,7 +108,7 @@ function PrepareHudImport(SourceRoot, GameRoot: string): string;
 var
   Manifest: TArrayOfString;
   Relative, Source, Original, Expected, Current, Line: string;
-  I, TabAt: Integer;
+  I, TabAt, CurrentCount: Integer;
   Embedded, Extracted: Boolean;
 begin
   ExtractTemporaryFile('upscaled-hud-checksums.tsv');
@@ -114,6 +116,7 @@ begin
     RaiseException(CustomMessage('AssetImportFailed'));
   Embedded := SourceRoot = '';
   Extracted := False;
+  CurrentCount := 0;
   if not Embedded then SourceRoot := AddBackslash(SourceRoot);
   for I := 0 to GetArrayLength(Manifest) - 1 do begin
     Line := Manifest[I];
@@ -123,7 +126,10 @@ begin
     Original := Copy(Line, TabAt + 1, 64);
     Expected := Copy(Line, TabAt + 66, 64);
     Current := AssetDigest(GameRoot + Relative);
-    if Current = Expected then Continue;
+    if Current = Expected then begin
+      CurrentCount := CurrentCount + 1;
+      Continue;
+    end;
     if Current <> Original then begin
       Result := FmtMessage(CustomMessage('AssetConflict'), [Relative]);
       Exit;
@@ -142,6 +148,8 @@ begin
     end;
     QueueAsset(Source, Relative, Current, Expected);
   end;
+  Log('Verified HD interface files already installed: ' + IntToStr(CurrentCount));
+  Log('Verified HD interface files queued: ' + IntToStr(GetArrayLength(Assets)));
   Result := '';
 end;
 
@@ -187,7 +195,7 @@ begin
   Result := '';
   GameRoot := AddBackslash(WizardDirValue);
   try
-    #ifdef LocalHudPayload
+    #ifdef EmbeddedHudPayload
     Result := PrepareHudImport('', GameRoot);
     #else
     if Trim(AssetEdits[0].Text) <> '' then
