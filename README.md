@@ -4,7 +4,7 @@ A patch for the 2005 PC release. The installer supports Windows 7 SP1 and later 
 
 ## Installation
 
-Run the complete **NFSMW-Unlimited-Setup.exe**, choose a setup language, and select the original game folder containing `speed.exe`. Setup validates the executable, applies all 295 bundled HD interface files, and installs the patch and controller libraries. It preserves existing settings and backs up replaced files under `UnlimitedCommunity/BeforeUnlimited` inside the game folder.
+Run the complete **NFSMW-Unlimited-Setup.exe**, choose a setup language, and select the original game folder containing `speed.exe`. Setup validates the executable, applies all 295 bundled HD interface files, and installs the patch and controller libraries. It preserves existing settings and backs up replaced files under `UnlimitedCommunity/BeforeUnlimited` inside the game folder. [Download the complete installer](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/tag/unlimited-hd-preview)
 
 Setup is available in English, Spanish, French, German, Italian, Dutch, Portuguese, Polish, Russian, Japanese, Swedish, and Danish.
 
@@ -19,13 +19,12 @@ Setup is available in English, Spanish, French, German, Italian, Dutch, Portugue
 ## HD interface and cutscenes
 
 - The complete installer embeds the verified Unlimited HD profile and applies it offline. The profile contains LunicAura106's Upscaled HUD and supplemental resources prepared from the game installation. [Upscaled HUD by LunicAura106](https://nfsmods.xyz/mod/1096)
-- The historical GitHub release installers are runtime-only previews. Their optional HUD importer accepts a previously prepared Unlimited HD game folder on the **HD game assets** page or via `/HDHUD="C:\Games\Unlimited HD Source"`. [GitHub releases](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases)
 - To import replacement cutscenes you have prepared, choose the folder containing the HD VP6 files or pass `/HDMOVIES="C:\Games\HD Movies"`. Setup verifies the original filename, video dimensions, frame rate, and packet structure before copying to `MOVIES_HD`. The original movies stay in place.
 
 ## Build
 
 Use LLVM-MinGW for x86, the Windows and Vulkan SDKs, and Inno Setup 6. Run `installer/build.ps1` from PowerShell. The default build reads the verified HD profile from `Juego` and writes the complete `dist/NFSMW-Unlimited-Setup.exe`. Use `-HudGameDirectory` to specify another folder containing that profile. A missing file or checksum mismatch stops the build.
 
-The complete executable contains archives from the local game installation. `-RuntimeOnly` builds the separately named `NFSMW-Unlimited-Runtime-Setup.exe` for distribution alongside the source. Use `-Compiler` or `-LegacyUcrt` to specify the Inno Setup compiler or the x86 SDK redistributables.
+The complete executable contains archives from the local game installation. `-RuntimeOnly` builds the separately named `NFSMW-Unlimited-Runtime-Setup.exe` with an optional HD profile importer. Use `-Compiler` or `-LegacyUcrt` to specify the Inno Setup compiler or the x86 SDK redistributables.
 
 Bundled controller libraries retain [their original licenses](third-party/controllers/Licenses).
