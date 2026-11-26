@@ -111,3 +111,54 @@ done:
     HeapFree(heap, 0, path);
     return result;
 }
+
+static BOOL read_exact(HANDLE file, void *data, DWORD size) {
+    DWORD bytes;
+    return ReadFile(file, data, size, &bytes, NULL) && bytes == size;
+}
+
+static BOOL valid_hd_movie(HANDLE file, BOOL pal) {
+    DWORD header[8];
+    LARGE_INTEGER length;
+    if (!GetFileSizeEx(file, &length) || length.QuadPart < sizeof(header) ||
+        length.QuadPart > 0x7fffffff || !read_exact(file, header, sizeof(header)) ||
+        header[0] != 0x6468564d || header[1] != sizeof(header) || header[2] != 0x56503630 ||
+        !header[4] || !header[5] || header[5] > length.QuadPart || !header[7]) return FALSE;
+    const DWORD width = header[3] & 0xffff, height = header[3] >> 16;
+    if (!(width == 1280 && height == 720) && !(width == 1920 && (height == 1080 || height == 1088))) return FALSE;
+    LONGLONG error = pal ? (LONGLONG)header[6] - 25LL * header[7]
+                         : 1001LL * header[6] - 30000LL * header[7];
+    if (error < 0) error = -error;
+    if (pal ? 10 * error > header[7] : 10 * error > 1001LL * header[7]) return FALSE;
+
+    const DWORD largest_packet = (header[5] + 3) & ~3u;
+    DWORD frames = 0;
+    LARGE_INTEGER pos;
+    for (pos.QuadPart = sizeof(header); pos.QuadPart < length.QuadPart;) {
+        DWORD packet[2];
+        if (!SetFilePointerEx(file, pos, NULL, FILE_BEGIN) || !read_exact(file, packet, sizeof(packet)) ||
+            packet[1] < sizeof(packet) || packet[1] > length.QuadPart - pos.QuadPart) return FALSE;
+        const BOOL keyframe = packet[0] == 0x4b30564d; // MV0K
+        if (keyframe || packet[0] == 0x4630564d) {   // MV0F
+            const DWORD size = packet[1] - sizeof(packet);
+            if (!size || size > largest_packet || (!frames && !keyframe) || ++frames > header[4]) return FALSE;
+        }
+        if (keyframe) {
+            UCHAR frame[8];
+            if (packet[1] <= sizeof(packet) + sizeof(frame) || !read_exact(file, frame, sizeof(frame)) ||
+                (frame[0] & 0x80) || (frame[1] >> 3) > 8) return FALSE;
+            const unsigned offset = ((frame[0] & 1) || !(frame[1] & 6)) ? 4 : 2;
+            if (frame[offset] != (height + 15) / 16 || frame[offset + 1] != (width + 15) / 16) return FALSE;
+        }
+        pos.QuadPart += packet[1];
+    }
+    return frames == header[4];
+}
+
+BOOL WINAPI VerifyReplacementMovie(const wchar_t *path, BOOL pal) {
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (file == INVALID_HANDLE_VALUE) return FALSE;
+    const BOOL valid = valid_hd_movie(file, pal);
+    CloseHandle(file);
+    return valid;
+}

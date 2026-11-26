@@ -23,7 +23,11 @@ PrivilegesRequiredOverridesAllowed=commandline
 CloseApplications=no
 RestartApplications=no
 Uninstallable=no
+#ifdef LocalHudPayload
+OutputBaseFilename=NFSMW-Unlimited-Local-HD-Setup
+#else
 OutputBaseFilename=NFSMW-Unlimited-Setup
+#endif
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -46,6 +50,10 @@ Name: "da"; MessagesFile: "compiler:Languages\Danish.isl"
 
 [Files]
 Source: "{#BuildPayload}\unlimited-setup-private.dll"; Flags: dontcopy
+Source: "upscaled-hud-checksums.tsv"; Flags: dontcopy
+#ifdef LocalHudPayload
+#include LocalHudPayload
+#endif
 Source: "{#BuildPayload}\d3d9.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('d3d9.dll')
 Source: "..\third-party\controllers\dinput8.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('dinput8.dll')
 Source: "..\third-party\controllers\Xidi.32.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('Xidi.32.dll')
@@ -62,6 +70,8 @@ Source: "{#LegacyUcrt}\*.dll"; DestDir: "{app}"; Flags: onlyifdoesntexist; OnlyB
 [Code]
 function VerifyGameDirectory(Dir: string): LongWord;
   external 'VerifyGameDirectory@files:unlimited-setup-private.dll stdcall delayload setuponly';
+
+#include "AssetImport.iss"
 
 function FindGameFolder(Param: string): string;
 begin
@@ -96,6 +106,8 @@ function PrepareToInstall(var NeedsRestart: Boolean): string;
 begin
   Log('Unlimited setup language: ' + ActiveLanguage);
   Result := GameError(WizardDirValue);
+  if Result = '' then
+    Result := PrepareAssetImport;
 end;
 
 procedure BackupOriginal(FileName: string);

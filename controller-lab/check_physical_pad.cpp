@@ -102,7 +102,7 @@ bool WaitForPulse(const SdlApi& api, SDL_Gamepad* gamepad, Uint16 low, Uint16 hi
 int Pulse(const SdlApi& api, SDL_JoystickID id) {
     std::unique_ptr<SDL_Gamepad, decltype(api.closeGamepad)> gamepad(api.openGamepad(id), api.closeGamepad);
     if (!gamepad) {
-        std::fprintf(stderr, "No se pudo abrir el mando: %s\n", api.error());
+        std::fprintf(stderr, "Could not open the gamepad: %s\n", api.error());
         return 5;
     }
     const auto properties = api.properties(gamepad.get());
@@ -110,27 +110,27 @@ int Pulse(const SdlApi& api, SDL_JoystickID id) {
         constexpr Uint16 strength = 26000;
         const bool low = WaitForPulse(api, gamepad.get(), strength, 0);
         const bool high = WaitForPulse(api, gamepad.get(), 0, strength);
-        std::printf("Baja frecuencia: %s. Alta frecuencia: %s.\n",
-                    low ? "pulso y parada aceptados" : "prueba fallida",
-                    high ? "pulso y parada aceptados" : "prueba fallida");
+        std::printf("Low-frequency motor: %s. High-frequency motor: %s.\n",
+                    low ? "pulse and stop accepted" : "test failed",
+                    high ? "pulse and stop accepted" : "test failed");
         return low && high ? 0 : 5;
     }
 
     if (!api.initSubSystem(SDL_INIT_HAPTIC)) {
-        std::fprintf(stderr, "No se pudo inicializar la respuesta haptica: %s\n", api.error());
+        std::fprintf(stderr, "Could not initialize haptic feedback: %s\n", api.error());
         return 5;
     }
     std::unique_ptr<SDL_Haptic, decltype(api.closeHaptic)> haptic(
         api.openHaptic(api.gamepadJoystick(gamepad.get())), api.closeHaptic);
     if (!haptic || !api.initHaptic(haptic.get())) {
-        std::fprintf(stderr, "El controlador no expone vibracion compatible: %s\n", api.error());
+        std::fprintf(stderr, "The controller does not expose supported rumble: %s\n", api.error());
         return 5;
     }
     constexpr Uint32 durationMs = 125;
     const bool accepted = api.playHaptic(haptic.get(), 0.4f, durationMs);
     if (accepted) Sleep(durationMs);
     const bool stopped = api.stopHaptic(haptic.get());
-    std::printf("Respuesta haptica: %s.\n", accepted && stopped ? "pulso y parada aceptados" : "prueba fallida");
+    std::printf("Haptic feedback: %s.\n", accepted && stopped ? "pulse and stop accepted" : "test failed");
     return accepted && stopped ? 0 : 5;
 }
 
@@ -152,13 +152,13 @@ bool ParseDeviceMatch(const wchar_t* text, DeviceMatch& match) {
 int Probe(const SdlApi& api, const DeviceMatch* match) {
     api.setMainReady();
     if (!api.init(SDL_INIT_GAMEPAD)) {
-        std::fprintf(stderr, "No se pudo inicializar SDL3: %s\n", api.error());
+        std::fprintf(stderr, "Could not initialize SDL3: %s\n", api.error());
         return 2;
     }
     int count{};
     std::unique_ptr<SDL_JoystickID, decltype(api.free)> ids(api.joysticks(&count), api.free);
     if (!ids) {
-        std::fprintf(stderr, "No se pudieron enumerar los mandos: %s\n", api.error());
+        std::fprintf(stderr, "Could not enumerate controllers: %s\n", api.error());
         return 2;
     }
     SDL_JoystickID pulseTarget = 0;
@@ -170,30 +170,30 @@ int Probe(const SdlApi& api, const DeviceMatch* match) {
         const auto product = api.product(id);
         const bool virtualDevice = api.isVirtual(id);
         const bool mapped = api.isGamepad(id);
-        std::printf("ID %u | %s | %04X:%04X | %s | %s\n", id, name ? name : "Sin nombre",
+        std::printf("ID %u | %s | %04X:%04X | %s | %s\n", id, name ? name : "Unnamed",
                     unsigned(vendor), unsigned(product),
-                    mapped ? "mando reconocido" : "sin asignacion de botones",
-                    virtualDevice ? "virtual de SDL" : "detectado por SDL");
+                    mapped ? "mapped gamepad" : "unmapped controller",
+                    virtualDevice ? "SDL virtual device" : "detected by SDL");
         if (match && mapped && !virtualDevice && match->vendor == vendor && match->product == product) {
             pulseTarget = id;
             ++matches;
         }
     }
-    std::printf("Dispositivos encontrados: %d.\n", count);
+    std::printf("Devices found: %d.\n", count);
     if (!match) return 0;
     if (matches != 1) {
-        std::fprintf(stderr, "La prueba encontro %d mandos reconocidos con ese VID:PID. Se requiere uno.\n", matches);
+        std::fprintf(stderr, "Found %d mapped gamepads with that VID:PID. Exactly one is required.\n", matches);
         return 4;
     }
     if (CheckGameStatus() != GameStatus::Closed) {
-        std::fputs("La prueba requiere que el juego este cerrado.\n", stderr);
+        std::fputs("Close the game before running the test.\n", stderr);
         return 3;
     }
     return Pulse(api, pulseTarget);
 }
 
 int Usage() {
-    std::fputs("Uso: check_physical_pad <ruta a SDL3.dll> [--pulse VID:PID]\n", stderr);
+    std::fputs("Usage: check_physical_pad <path to SDL3.dll> [--pulse VID:PID]\n", stderr);
     return 1;
 }
 
@@ -206,7 +206,7 @@ int wmain(int argc, wchar_t** argv) {
     if (sendPulse) {
         if (std::wcscmp(argv[2], L"--pulse") != 0 || !ParseDeviceMatch(argv[3], match)) return Usage();
         if (CheckGameStatus() != GameStatus::Closed) {
-            std::fputs("La prueba requiere que el juego este cerrado.\n", stderr);
+            std::fputs("Close the game before running the test.\n", stderr);
             return 3;
         }
     }
@@ -215,12 +215,12 @@ int wmain(int argc, wchar_t** argv) {
     if (!length || length >= sizeof(fullPath) / sizeof(*fullPath)) return Usage();
     const auto sdl = LoadLibraryExW(fullPath, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!sdl) {
-        std::fprintf(stderr, "No se pudo cargar SDL3. Error de Windows: %lu.\n", GetLastError());
+        std::fprintf(stderr, "Could not load SDL3. Windows error: %lu.\n", GetLastError());
         return 2;
     }
     SdlApi api;
     const bool ready = api.Bind(sdl);
-    if (!ready) std::fputs("La biblioteca carece de las funciones SDL3 requeridas.\n", stderr);
+    if (!ready) std::fputs("The library is missing the required SDL3 functions.\n", stderr);
     const int result = ready ? Probe(api, sendPulse ? &match : nullptr) : 2;
     if (ready) api.quit();
     FreeLibrary(sdl);

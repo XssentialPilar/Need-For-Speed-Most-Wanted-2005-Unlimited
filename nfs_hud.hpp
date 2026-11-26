@@ -128,13 +128,13 @@ void SetHudGroupOffset(HudGroupPosition& anchor, void* object, HudPoint offset) 
 
 // Use the actual viewport in FEng's centered coordinates. One margin
 // measured on the short axis keeps equal pixel padding on both edges.
-constexpr HudPoint HudCornerOffset(const HudBounds& bounds, float scaleX, float scaleY, bool right) {
+constexpr HudPoint HudCornerOffset(const HudBounds& bounds, float scaleX, float scaleY, bool right, bool bottom = true) {
     const float halfWidth = 320.0f / scaleX;
     const float halfHeight = 240.0f / scaleY;
-    const float margin = 0.05f * std::min(halfWidth, halfHeight);
+    const float margin = 0.09f * std::min(halfWidth, halfHeight);
     return {
         right ? halfWidth - margin - bounds.right : -halfWidth + margin - bounds.left,
-        halfHeight - margin - bounds.bottom
+        bottom ? halfHeight - margin - bounds.bottom : -halfHeight + margin - bounds.top
     };
 }
 
@@ -150,12 +150,12 @@ public:
         }
     }
 
-    void Align(HudPoint origin, bool right) {
+    void Align(HudPoint origin, bool right, bool bottom = true) {
         HudBounds bounds{};
         unsigned remaining = 512;
         for (auto* object : objects) MeasureHudBounds(object, origin, 0, remaining, bounds);
         if (!bounds.Valid()) return;
-        const auto offset = HudCornerOffset(bounds, activeLayout.hudX, activeLayout.hudY, right);
+        const auto offset = HudCornerOffset(bounds, activeLayout.hudX, activeLayout.hudY, right, bottom);
         for (std::size_t i = 0; i < N; ++i) SetHudGroupOffset(positions[i], objects[i], offset);
     }
 
@@ -232,7 +232,7 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
     static void* previousMap = nullptr;
     static float previousScaleX = 0, previousScaleY = 0;
     static float mapOffset = 0;
-    static std::array<HudGroupPosition, 20> anchors{};
+    static std::array<HudGroupPosition, 5> anchors{};
     constexpr std::uint32_t mapWidgets[] = {
         0x382d2fc9, 0xc46a80a9, 0xb0f63386, // Ring, pursuit heat and its counter.
         0x87c38e97, 0xedfb6d37 // Left tachometer and needle in drag events.
@@ -241,8 +241,13 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
         0x5164d4ea, 0x941fff09, 0x87c38e97, 0xc5d551b7, 0x8991bd54, // Gauge groups.
         0xedfb6d37, 0x5df2f5b4 // Needles drawn as separate siblings.
     };
+    constexpr std::uint32_t raceWidgets[] = {
+        0xb1c5ed0d, 0x5ed609a1, // Race information and leaderboard.
+        0x2269d232, 0x9afce2b8  // Pursuit information and its status image.
+    };
     static HudCorner<std::size(mapWidgets)> mapCorner;
     static std::array<HudCorner<std::size(speedWidgets)>, 2> speedCorners;
+    static std::array<HudCorner<std::size(raceWidgets)>, 2> raceCorners;
     static HudCorner<1> dragCorner;
     static unsigned updates = 0;
     static unsigned settlingFrames = 0;
@@ -257,6 +262,7 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
         anchors = {};
         mapCorner = {};
         speedCorners = {};
+        raceCorners = {};
         dragCorner = {};
         mapOffset = 0;
     }
@@ -276,6 +282,7 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
     for (std::size_t i = 0; i < rightRoots.size(); ++i) {
         rightContent[i] = FindHudChild(rightRoots[i], 0x5c7a5c8a);
         speedCorners[i].FindChildren(rightContent[i], speedWidgets);
+        raceCorners[i].FindChildren(rightContent[i], raceWidgets);
     }
     constexpr std::uint32_t dragWidgets[] = {0x87c38e97};
     dragCorner.FindChildren(right, dragWidgets);
@@ -287,13 +294,13 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
     AnchorHudGroup(anchors[2], alternateRight, {}, {x, 0}, true, false);
 
     const auto leftContent = AddHudPoints(leftOrigin, ReadHudPosition(left));
-    AnchorHudGroup(anchors[6], FindHudChild(left, 0x3345911d), leftContent, {0, -y}, false, true);
+    AnchorHudGroup(anchors[3], FindHudChild(left, 0x3345911d), leftContent, {0, -y}, false, true);
     mapCorner.Align(leftContent, false);
     for (std::size_t i = 0; i < rightRoots.size(); ++i) {
         void* content = rightContent[i];
         const auto origin = AddHudPoints(ReadHudPosition(rightRoots[i]), ReadHudPosition(content));
-        AnchorHudGroup(anchors[7 + i], FindHudChild(content, 0xb1c5ed0d), origin, {0, -y}, false, true);
         speedCorners[i].Align(origin, true);
+        raceCorners[i].Align(origin, true, false);
     }
     dragCorner.Align(ReadHudPosition(right), true);
     AnchorHudGroup(anchors.back(), FindHudObject(package, 0x7fac287b), {}, {0, -y}, false, true);
@@ -313,6 +320,53 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
 
 bool InstallResponsiveRaceHud() {
     return RedirectCall(0x18cad2, 0x1696c0, reinterpret_cast<std::uintptr_t>(&LayoutRaceHud));
+}
+
+void LayoutSongNotice() {
+    static HudGroupPosition anchor;
+    auto* notice = FindHudObject("EA_Trax.fng", 0xa1341735);
+    const auto baseline = HudPositionWithoutOffset(anchor, notice);
+    if (!notice) return;
+    HudBounds bounds{};
+    unsigned remaining = 64;
+    MeasureHudBounds(notice, {}, 0, remaining, bounds);
+    if (!bounds.Valid()) return;
+
+    // Keep the banner on its authored side while moving its text and artwork together.
+    const auto current = ReadHudPosition(notice);
+    const float dx = current.x - baseline.x;
+    const float dy = current.y - baseline.y;
+    bounds.left -= dx;
+    bounds.right -= dx;
+    bounds.top -= dy;
+    bounds.bottom -= dy;
+    auto offset = HudCornerOffset(bounds, activeLayout.hudX, activeLayout.hudY, false, false);
+    // The game draws the center pursuit meter separately at a fixed canvas position.
+    // Reserve its space when the song banner would otherwise overlap it.
+    constexpr HudBounds meter{-96.0f, -216.0f, 96.0f, -186.0f};
+    if (GameValue<std::uint32_t>(gameFlowStateRva) == 6 &&
+        bounds.right + offset.x > meter.left && bounds.left + offset.x < meter.right &&
+        bounds.bottom + offset.y > meter.top && bounds.top + offset.y < meter.bottom) {
+        const float gap = 0.02f * std::min(320.0f / activeLayout.hudX, 240.0f / activeLayout.hudY);
+        offset.y = meter.bottom + gap - bounds.top;
+    }
+    SetHudGroupOffset(anchor, notice, offset);
+}
+
+void __fastcall UpdateFrontendSongNotice(void* frontend, void*, int ticks, unsigned lock) {
+    GameFunction<void (__thiscall*)(void*, int, unsigned)>(0x1c53c0)(frontend, ticks, lock);
+    LayoutSongNotice();
+}
+
+bool InstallResponsiveSongNotice() {
+    constexpr std::uintptr_t update = 0x1c53c0;
+    constexpr std::uintptr_t first = 0x116a0d, second = 0x16441f;
+    auto original = GameValue<std::array<std::uint8_t, 5>>(first);
+    auto replacement = reinterpret_cast<std::uintptr_t>(&UpdateFrontendSongNotice);
+    if (!RedirectCall(first, update, replacement)) return false;
+    if (RedirectCall(second, update, replacement)) return true;
+    WriteGameBytes(first, original.data(), original.size());
+    return false;
 }
 
 } // namespace

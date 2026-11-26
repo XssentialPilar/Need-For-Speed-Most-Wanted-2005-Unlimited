@@ -1439,6 +1439,7 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     const bool rumble = UnlimitedRumble::Install(executable, settingsPath);
     aspectHookInstalled = InstallAspectCorrection();
     const bool responsiveHud = aspectHookInstalled && InstallResponsiveRaceHud();
+    const bool responsiveSongNotice = aspectHookInstalled && InstallResponsiveSongNotice();
     const bool optionLayout = InstallResponsiveOptionLayout();
     const bool moviePresentation = InstallMoviePresentation();
     const bool shadowNative = nativePassFactorySelected && nativePassesAtStartup == 12 && InstallNativeShadowList();
@@ -1467,8 +1468,8 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
                        std::strcmp(xenonEffects, "already loaded") != 0;
     if (LogFile log; log.file) {
         std::fprintf(log.file, "Unlimited scene: dx12_shadow_list=%u\n", shadowNative);
-        std::fprintf(log.file, "Unlimited UI: artwork=game_textures instruments=game language_selector_layout=%u hd_cursor=%u splash_brand=%u\n",
-                     optionLayout, cursorScaling, splashBrand);
+        std::fprintf(log.file, "Unlimited UI: artwork=game_textures instruments=game language_selector_layout=%u hd_cursor=%u splash_brand=%u song_notice_anchors=%u\n",
+                     optionLayout, cursorScaling, splashBrand, responsiveSongNotice);
         std::fprintf(log.file, "\nSession pid=%lu frame_limit=%u graphics_menu=%s present_call=%s sim_step=%uHz timing=%s shadows=%s shadow_continuity=%s cube_reflections=%s font_atlas=%s filtering=%s\n",
                      GetCurrentProcessId(), frameLimits[frameLimitIndex], frameMenu ? "FPS option" : "stock",
                      installed ? "verified" : "unmodified",

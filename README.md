@@ -1,22 +1,31 @@
 # Need for Speed Most Wanted 2005 Unlimited
 
-Parche para la edición de PC de 2005. El instalador admite Windows 7 SP1 y versiones posteriores en sistemas capaces de ejecutar aplicaciones x86. Requiere una instalación compatible del juego original con el ejecutable 1.3.
+A patch for the 2005 PC release. The installer supports Windows 7 SP1 and later on systems that can run x86 applications. Unlimited requires a compatible installation of the original game with the 1.3 executable.
 
-## Instalar
+## Installation
 
-Descarga **NFSMW-Unlimited-Setup.exe** desde [Releases](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases). Elige el idioma del instalador y selecciona la carpeta que contiene `speed.exe`. El instalador valida el ejecutable, instala el parche y las bibliotecas de mandos y conserva los archivos de configuración existentes. Las copias de las DLL reemplazadas quedan en `UnlimitedCommunity/BeforeUnlimited` dentro de la carpeta del juego.
+Download **NFSMW-Unlimited-Setup.exe**, choose a setup language, and select the original game folder containing `speed.exe`. Setup validates the executable, installs the patch and controller libraries, and preserves existing settings. Backups of replaced files are written under `UnlimitedCommunity/BeforeUnlimited` inside the game folder. [Releases](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases)
 
-El instalador ofrece español, inglés, francés, alemán, italiano, neerlandés, portugués, polaco, ruso, japonés, sueco y danés.
+Setup is available in English, Spanish, French, German, Italian, Dutch, Portuguese, Polish, Russian, Japanese, Swedish, and Danish.
 
-## Controles y pantalla
+## Display and controls
 
-- El minimapa y el velocímetro se desplazan junto con sus indicadores hacia las esquinas inferiores. El margen se calcula a partir del lado corto de la imagen y los instrumentos mantienen sus proporciones.
-- **Opciones → Gráficos → Modo de pantalla** ofrece pantalla completa, ventana y sin bordes.
-- **Opciones → Gráficos → Avanzado → API de salida** ofrece DirectX 9, DirectX 11, DirectX 12 y Vulkan. La API seleccionada se aplica al reiniciar. El juego arranca con DirectX 9 tras una instalación limpia. Las otras API son experimentales y el motor 3D todavía usa Direct3D 9 para buena parte de la escena. [Detalles técnicos](renderer-lab/Presentacion.md).
-- El instalador incluye las dependencias de mandos y el complemento XenonEffects. Los archivos comerciales del juego y los paquetes opcionales de cinemáticas e interfaz HD se obtienen por separado. [Créditos de mandos](third-party/controllers/README.md) · [Referencias de Xbox 360](Mods%20de%20Xbox%20360.md).
+- The minimap, speedometer, pursuit panel, and EA Trax notice each move as a group. Their corner margins scale with the shorter side of the viewport, and their artwork retains its proportions.
+- In the video settings, **Display mode** offers **Fullscreen**, **Windowed**, and **Borderless**.
+- In the advanced video settings, **Presentation API** takes effect after restarting. **DirectX 9** is the default. **DirectX 11, DirectX 12, and Vulkan are experimental.** The renderer may fall back to DirectX 9, which the engine uses for much of the 3D scene. [Technical details](renderer-lab/presentation.md)
+- Setup includes the frame-rate, graphics, audio, language, window, and HUD patches, plus XenonEffects. [Xbox 360 integration](xbox-360-integration.md)
+- Setup installs the controller libraries and default analog mappings. Vibration is enabled by default for devices whose driver exposes compatible motors. Set `Vibration=0` under `[Controller]` in `NFSMW-Unlimited.ini` to turn it off. [Controller support and credits](third-party/controllers/README.md)
 
-## Compilar
+## HD interface and cutscenes
 
-Usa LLVM-MinGW x86, los SDK de Windows y Vulkan, y el compilador Inno Setup 6. Ejecuta `installer/build.ps1` desde PowerShell. El instalador se genera en `dist/NFSMW-Unlimited-Setup.exe`. Puedes indicar la ruta de Inno mediante `-Compiler` y la de las bibliotecas redistribuibles x86 del SDK mediante `-LegacyUcrt`.
+- To transfer a previously prepared Unlimited HD interface, select its game folder on the **HD game assets** page. The importer verifies the 295 replacement files and the target game archives before replacing any asset. It can also be run with `/HDHUD="C:\Games\Unlimited HD Source"`.
+- For a first-time installation of the community interface, follow the author's setup instructions for the original Upscaled HUD and then run Unlimited Setup with the HD HUD source field blank. Setup preserves the installed art and adds the responsive layout at runtime. The full Unlimited HD profile also contains supplemental resources from the local build. [Upscaled HUD by LunicAura106](https://nfsmods.xyz/mod/1096)
+- To import replacement cutscenes you have prepared, choose the folder containing the HD VP6 files or pass `/HDMOVIES="C:\Games\HD Movies"`. Setup verifies the original filename, video dimensions, frame rate, and packet structure before copying to `MOVIES_HD`. The original movies stay in place.
 
-Las bibliotecas incluidas conservan [sus licencias](third-party/controllers/Licenses).
+## Build
+
+Use LLVM-MinGW for x86, the Windows and Vulkan SDKs, and Inno Setup 6. Run `installer/build.ps1` from PowerShell. Use `-Compiler` to specify the Inno Setup path and `-LegacyUcrt` to specify the location of the x86 SDK redistributables.
+
+To build an offline installer for your own copy, run `installer/build.ps1 -HudGameDirectory 'C:\Games\Unlimited HD Source' -OutputDirectory 'dist/local'`. This build embeds your verified HD interface assets and applies them automatically. Keep the resulting **NFSMW-Unlimited-Local-HD-Setup.exe** with your local files. The public release contains the patch and the HD import tools.
+
+Bundled controller libraries retain [their original licenses](third-party/controllers/Licenses).
