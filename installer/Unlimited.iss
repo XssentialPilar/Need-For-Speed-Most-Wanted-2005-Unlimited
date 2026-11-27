@@ -61,6 +61,7 @@ Source: "upscaled-hud-checksums.tsv"; Flags: dontcopy
 #include EmbeddedHudPayload
 #endif
 Source: "{#BuildPayload}\d3d9.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('d3d9.dll')
+Source: "{#BuildPayload}\Discx\*"; DestDir: "{app}\UnlimitedCommunity\Discx"; Flags: ignoreversion recursesubdirs
 Source: "..\third-party\controllers\dinput8.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('dinput8.dll')
 Source: "..\third-party\controllers\Xidi.32.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('Xidi.32.dll')
 Source: "..\third-party\controllers\SDL3.dll"; DestDir: "{app}"; Flags: ignoreversion; BeforeInstall: BackupOriginal('SDL3.dll')
@@ -71,7 +72,11 @@ Source: "..\third-party\xenon\NFSMW_XenonEffects.asi"; DestDir: "{app}\Unlimited
 Source: "..\third-party\xenon\XenonEffects.tpk"; DestDir: "{app}\GLOBAL"; Flags: ignoreversion
 Source: "..\third-party\xenon\NFSMW_XenonEffects.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Source: "..\third-party\xenon\LICENSE"; DestDir: "{app}\UnlimitedCommunity"; DestName: "NFSMW_XenonEffects-LICENSE.txt"; Flags: ignoreversion
+Source: "..\third-party\split-screen\LICENSE"; DestDir: "{app}\UnlimitedCommunity"; DestName: "SplitScreen-LICENSE.txt"; Flags: ignoreversion
 Source: "{#LegacyUcrt}\*.dll"; DestDir: "{app}"; Flags: onlyifdoesntexist; OnlyBelowVersion: 10.0
+
+[Dirs]
+Name: "{app}\UnlimitedMusic"; Permissions: users-modify; Flags: uninsneveruninstall
 
 [Code]
 function VerifyGameDirectory(Dir: string): LongWord;

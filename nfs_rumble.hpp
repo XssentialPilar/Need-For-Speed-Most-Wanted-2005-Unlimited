@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include "third-party/split-screen/integration.hpp"
 
 namespace UnlimitedRumble {
 namespace Detail {
@@ -177,6 +178,7 @@ struct DrivingFeedback {
     ULONGLONG impulseUntil = 0;
     IDirectInputDevice8A* gameDevice = nullptr;
     ULONGLONG retryAt = 0;
+    ULONGLONG lastUpdate = 0;
 
     void ClearFrame() {
         road = slip = skid = rpm = 0.0f;
@@ -258,6 +260,9 @@ void* feedbackTable[] = {
     reinterpret_cast<void*>(&Damage), reinterpret_cast<void*>(&GearShift), reinterpret_cast<void*>(&Collision),
 };
 DrivingFeedback feedback{feedbackTable, {}};
+DrivingFeedback splitFeedback[4] = {
+    {feedbackTable, {}}, {feedbackTable, {}}, {feedbackTable, {}}, {feedbackTable, {}}
+};
 
 bool HasFocus() {
     static HWND previousWindow = nullptr;
@@ -274,7 +279,7 @@ bool HasFocus() {
 bool UsePrimaryPad(void* player) {
     // The PC controller bindings target the first enumerated gamepad.
     // Steering wheels and other native DirectInput devices keep their own path.
-    if (Field<const int>(player, 0x64) != 0 ||
+    if (unlimited_split_screen::RaceActive() || Field<const int>(player, 0x64) != 0 ||
         *reinterpret_cast<const unsigned*>(imageBase + gameFlowRva) != 6) return false;
     if (!HasFocus()) return false;
     auto* joystick = *reinterpret_cast<void**>(imageBase + joystickRva);
@@ -295,19 +300,36 @@ bool UsePrimaryPad(void* player) {
     return opened;
 }
 
+DrivingFeedback* FeedbackForPlayer(void* player) {
+    if (!unlimited_split_screen::RaceActive()) return UsePrimaryPad(player) ? &feedback : nullptr;
+    if (!HasFocus()) return nullptr;
+    const int slot = unlimited_split_screen::FeedbackPad(Field<const int>(player, 0x64));
+    if (slot < 0 || slot >= 4) return nullptr;
+    auto& target = splitFeedback[slot];
+    const auto now = GetTickCount64();
+    if (!target.motors.CheckConnection(now)) {
+        if (now < target.retryAt) return nullptr;
+        target.retryAt = now + 750;
+        if (!target.motors.Open(slot)) return nullptr;
+    }
+    target.lastUpdate = now;
+    return &target;
+}
+
 void __fastcall DoFeedback(void* player) {
     const std::lock_guard<std::recursive_mutex> lock(feedbackMutex);
     using Native = void (__thiscall*)(void*);
     const auto native = reinterpret_cast<Native>(imageBase + doFfbRva);
-    if (!UsePrimaryPad(player)) {
-        feedback.Stop();
+    auto* target = FeedbackForPlayer(player);
+    if (!target) {
+        if (!unlimited_split_screen::RaceActive()) feedback.Stop();
         return native(player);
     }
     auto& current = Field<void*>(player, 0x58);
     auto& wheel = Field<void*>(player, 0x5c);
     void* const original = current;
     void* const originalWheel = wheel;
-    current = &feedback;
+    current = target;
     wheel = nullptr;
     native(player);
     wheel = originalWheel;
@@ -319,7 +341,8 @@ void __fastcall HandleCollision(void* object, void*, const void* collision) {
     using Native = void (__thiscall*)(void*, const void*);
     const auto native = reinterpret_cast<Native>(imageBase + collisionRva);
     auto* player = static_cast<std::uint8_t*>(object) - 0x54;
-    if (!UsePrimaryPad(player)) return native(object, collision);
+    auto* target = FeedbackForPlayer(player);
+    if (!target) return native(object, collision);
     using Settings = std::uint8_t* (__thiscall*)(void*);
     const auto get = reinterpret_cast<Settings>(imageBase + getSettingsRva);
     auto* settings = get(player + 0x4c);
@@ -330,7 +353,7 @@ void __fastcall HandleCollision(void* object, void*, const void* collision) {
     // only across this call when Unlimited vibration is active.
     const auto originalVibration = settings[4];
     settings[4] = 1;
-    current = &feedback;
+    current = target;
     native(object, collision);
     current = original;
     settings[4] = originalVibration;
@@ -383,10 +406,17 @@ inline void Service() {
     using namespace Detail;
     if (!imageBase) return;
     const std::lock_guard<std::recursive_mutex> lock(feedbackMutex);
-    if (!feedback.motors.IsOpen()) return;
-    if (*reinterpret_cast<const unsigned*>(imageBase + gameFlowRva) == 6 && HasFocus()) return;
-    feedback.Stop();
-    feedback.motors.Close();
+    const bool active = *reinterpret_cast<const unsigned*>(imageBase + gameFlowRva) == 6 && HasFocus();
+    const bool split = active && unlimited_split_screen::RaceActive();
+    const auto close = [](DrivingFeedback& target) {
+        if (!target.motors.IsOpen()) return;
+        target.Stop();
+        target.motors.Close();
+    };
+    if (!active || split) close(feedback);
+    const auto now = GetTickCount64();
+    for (auto& target : splitFeedback)
+        if (!split || now - target.lastUpdate > 250) close(target);
 }
 
 } // namespace UnlimitedRumble

@@ -96,6 +96,29 @@ bool SubmitOptionPlate(void* cached, void* renderInfo, const OptionPlate& bounds
     return true;
 }
 
+// Text is fit in the same undistorted canvas as the splash art. Keep native
+// positions when they fit, including animated prompts and the version label.
+bool FitSplashText(D3DMATRIX& matrix, unsigned format, float width, float height) {
+    if (!(width > 0 && width < 65536 && height > 0 && height < 256 &&
+          matrix._11 > 0 && matrix._22 > 0 &&
+          std::fabs(matrix._12) < .001f && std::fabs(matrix._21) < .001f)) return false;
+    const float halfWidth = 320.0f / activeLayout.hudX;
+    const float halfHeight = 240.0f / activeLayout.hudY;
+    const float margin = 240.0f * .10f;
+    const float left = 320.0f - halfWidth + margin, right = 320.0f + halfWidth - margin;
+    const float top = 240.0f - halfHeight + margin, bottom = 240.0f + halfHeight - margin;
+    const float scale = std::min({1.0f, (right-left)/(width*matrix._11), (bottom-top)/(height*matrix._22)});
+    const float lineWidth = std::min(right-left, width * matrix._11 * scale);
+    const float lineHeight = std::min(bottom-top, height * matrix._22 * scale);
+    const float xOrigin = (format & 2) ? 1.0f : (format & 1) ? .5f : 0.0f;
+    const float yOrigin = (format & 4) ? .5f : (format & 8) ? 1.0f : 0.0f;
+    matrix._11 *= scale;
+    matrix._22 *= scale;
+    matrix._41 = std::clamp(matrix._41, left+xOrigin*lineWidth, right-(1-xOrigin)*lineWidth);
+    matrix._42 = std::clamp(matrix._42, top+yOrigin*lineHeight, bottom-(1-yOrigin)*lineHeight);
+    return true;
+}
+
 void __fastcall RenderResponsiveOption(void* font, void*, const OptionColor& color, const std::uint16_t* text,
                                        void* object, D3DMATRIX* source, void* cached, void* renderInfo) {
     const auto render = GameFunction<void(__thiscall*)(void*,const OptionColor&,const std::uint16_t*,void*,
@@ -110,11 +133,21 @@ void __fastcall RenderResponsiveOption(void* font, void*, const OptionColor& col
         const unsigned row=value?valueRow:OptionRowIndex(hash,firstOptionName);
         const unsigned format = HudField<unsigned>(object,0x6c);
         auto* data = HudField<void*>(object,0x2c);
+        auto* renderingPackage = GameValue<void*>(0x51cfac);
+        const char* name = renderingPackage ? HudField<const char*>(renderingPackage,0x0c) : nullptr;
+        const auto measure = GameFunction<float(__thiscall*)(void*,const std::uint16_t*,unsigned,unsigned,bool)>(0x186130);
+        if (name && !_stricmp(name, "MW_LS_Splash.fng")) {
+            // The splash retains unused off-canvas strings, including a debug
+            // placeholder. A tall viewport would otherwise expose them.
+            if (hash == 0xf1414fde || !(source->_41 >= 0 && source->_41 <= 640 &&
+                                        source->_42 >= 0 && source->_42 <= 480)) return;
+            fitted = *source;
+            const float width = measure(font,text,HudField<unsigned>(object,0x1c),0,false);
+            if (FitSplashText(fitted,format,width,HudField<float>(font,0x24))) drawMatrix = &fitted;
+        }
         // RenderString also receives subtitles, help text, status messages and
         // on-screen keyboard strings. Leave those native rendering paths intact.
-        if (row < 15 && data && !(format&16) && (format&3) == (value ? 1u : 2u)) {
-            auto* renderingPackage = GameValue<void*>(0x51cfac);
-            const char* name = renderingPackage ? HudField<const char*>(renderingPackage,0x0c) : nullptr;
+        else if (row < 15 && data && !(format&16) && (format&3) == (value ? 1u : 2u)) {
             bool known = false;
             for (const auto* candidate : optionPackages)
                 if (name && !_stricmp(name,candidate)) { known = true; break; }
@@ -130,7 +163,6 @@ void __fastcall RenderResponsiveOption(void* font, void*, const OptionColor& col
                     // the black stripes. Preserve the hue and the screen fade.
                     actualColor = {color.blue*168/color.red,color.green*168/color.red,168,color.alpha};
                 }
-                const auto measure = GameFunction<float(__thiscall*)(void*,const std::uint16_t*,unsigned,unsigned,bool)>(0x186130);
                 const float width = measure(font,text,HudField<unsigned>(object,0x1c),0,false);
                 const float half = value ? OptionValueHalfWidth(name,row,ReadHudPosition(object).x) : 0;
                 fitted = *source;

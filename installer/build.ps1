@@ -26,6 +26,7 @@ $output = [IO.Path]::GetFullPath($OutputDirectory)
 
 try {
     & (Join-Path $project 'build.ps1') -OutputFile (Join-Path $stage 'd3d9.dll')
+    & (Join-Path $project 'third-party/discx-codec/build.ps1') -Destination $stage
     $setupDll = Join-Path $stage 'unlimited-setup-private.dll'
     & i686-w64-mingw32-clang.exe -std=c17 -O2 -Wall -Wextra -Werror -nostdlib -shared -fno-stack-protector '-Wl,--entry,_DllMain@12' (Join-Path $PSScriptRoot 'setup_private.c') (Join-Path $PSScriptRoot 'setup_private.def') -lkernel32 -lbcrypt -o $setupDll
     if ($LASTEXITCODE) { throw "Setup DLL compilation failed ($LASTEXITCODE)" }

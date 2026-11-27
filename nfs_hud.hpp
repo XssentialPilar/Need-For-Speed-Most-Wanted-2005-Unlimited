@@ -2,6 +2,9 @@
 
 namespace {
 
+namespace unlimited_language { void ServiceApply(); }
+bool responsiveSongNoticeEnabled = false;
+
 struct HudPoint {
     float x = 0;
     float y = 0;
@@ -224,6 +227,7 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
     const auto previousMode = hud[0x330];
     auto* map = HudField<void*>(hud, 0x320);
     GameFunction<void (__thiscall*)(void*)>(0x1696c0)(hud);
+    if (unlimited_split_screen::RaceActive()) return;
     const auto* package = HudField<const char*>(hud, 0x24);
     if (!package || GameValue<std::uint32_t>(gameFlowStateRva) != 6) return;
     if (captureHudInstruments) captureHudInstruments(hud);
@@ -326,25 +330,37 @@ void LayoutSongNotice() {
     static HudGroupPosition anchor;
     auto* notice = FindHudObject("EA_Trax.fng", 0xa1341735);
     const auto baseline = HudPositionWithoutOffset(anchor, notice);
-    if (!notice) return;
+    if (!notice || HudField<unsigned>(notice,0x18) != 5) return;
+    auto* transform = HudField<void*>(notice,0x2c);
+    if (!transform) return;
     HudBounds bounds{};
     unsigned remaining = 64;
     MeasureHudBounds(notice, {}, 0, remaining, bounds);
     if (!bounds.Valid()) return;
 
-    // Keep the banner on its authored side while moving its text and artwork together.
-    const auto current = ReadHudPosition(notice);
-    const float dx = current.x - baseline.x;
-    const float dy = current.y - baseline.y;
-    bounds.left -= dx;
-    bounds.right -= dx;
-    bounds.top -= dy;
-    bounds.bottom -= dy;
+    const float availableWidth = 640.0f / activeLayout.hudX;
+    const float availableHeight = 480.0f / activeLayout.hudY;
+    const bool split = unlimited_split_screen::RaceActive();
+    // Leave room for the standings of the upper-left player on narrow displays.
+    const float widthShare = split ? .30f : .40f;
+    const float scale = std::min({.70f, widthShare * availableWidth / (bounds.right - bounds.left),
+                                 .15f * availableHeight / (bounds.bottom - bounds.top)});
+    const auto origin = ReadHudPosition(notice);
+    bounds.left = baseline.x + (bounds.left - origin.x) * scale;
+    bounds.right = baseline.x + (bounds.right - origin.x) * scale;
+    bounds.top = baseline.y + (bounds.top - origin.y) * scale;
+    bounds.bottom = baseline.y + (bounds.bottom - origin.y) * scale;
+    auto& xScale = HudField<float>(transform,0x38);
+    auto& yScale = HudField<float>(transform,0x3c);
+    if (xScale != scale || yScale != scale) {
+        xScale = yScale = scale;
+        MarkHudTransformDirty(notice);
+    }
     auto offset = HudCornerOffset(bounds, activeLayout.hudX, activeLayout.hudY, false, false);
-    // The game draws the center pursuit meter separately at a fixed canvas position.
+    // Single-player races can draw the police radar at a fixed canvas position.
     // Reserve its space when the song banner would otherwise overlap it.
     constexpr HudBounds meter{-96.0f, -216.0f, 96.0f, -186.0f};
-    if (GameValue<std::uint32_t>(gameFlowStateRva) == 6 &&
+    if (GameValue<std::uint32_t>(gameFlowStateRva) == 6 && !split &&
         bounds.right + offset.x > meter.left && bounds.left + offset.x < meter.right &&
         bounds.bottom + offset.y > meter.top && bounds.top + offset.y < meter.bottom) {
         const float gap = 0.02f * std::min(320.0f / activeLayout.hudX, 240.0f / activeLayout.hudY);
@@ -353,18 +369,139 @@ void LayoutSongNotice() {
     SetHudGroupOffset(anchor, notice, offset);
 }
 
-void __fastcall UpdateFrontendSongNotice(void* frontend, void*, int ticks, unsigned lock) {
-    GameFunction<void (__thiscall*)(void*, int, unsigned)>(0x1c53c0)(frontend, ticks, lock);
-    LayoutSongNotice();
+constexpr char songNoticePackage[] = "EA_Trax.fng";
+constexpr std::uint32_t songOriginalBadge = 0x000004e5; // EA in the game's texture table.
+constexpr std::uint32_t songOriginalTab = 0x575221d4;
+constexpr std::uintptr_t showChyronRva = 0x195ed0;
+using ShowChyron = void (__cdecl*)(const char*, const char*, const char*);
+std::uint64_t discNoticeShown = 0, discNoticeRequested = 0;
+
+void SetDiscNoticeBranding(bool custom, std::shared_ptr<const unlimited_discx::Cover> cover = {}) {
+    const bool hasCover = cover != nullptr;
+    unlimited_split_screen::SetDiscCover(std::move(cover));
+    const struct { std::uint32_t object, replacement; bool replace; } art[] = {
+        {songOriginalBadge, unlimited_split_screen::discxNoticeEmptyHash, hasCover},
+        {0xc56abf24, unlimited_split_screen::discxNoticeEmptyHash, hasCover}, // Inner stripes.
+        {unlimited_split_screen::discxCoverBase, unlimited_split_screen::discxNoticeCoverHash, hasCover},
+        {songOriginalTab, unlimited_split_screen::discxNoticeTabHash, custom},
+    };
+    for (const auto& item : art) {
+        auto* image = FindHudObject(songNoticePackage, item.object);
+        if (!image || HudField<unsigned>(image, 0x18) != 1) continue;
+        auto& texture = HudField<std::uint32_t>(image, 0x24);
+        const auto next = item.replace ? item.replacement : item.object;
+        if ((texture == item.object || texture == item.replacement) && texture != next) {
+            texture = next;
+            MarkHudTransformDirty(image);
+        }
+    }
 }
 
-bool InstallResponsiveSongNotice() {
+void __cdecl ShowStockSongNotice(const char* title, const char* artist, const char* album) {
+    if (unlimited_discx::Selected()) return;
+    if (discNoticeShown || discNoticeRequested) {
+        SetDiscNoticeBranding(false);
+        discNoticeShown = discNoticeRequested = 0;
+    }
+    GameFunction<ShowChyron>(showChyronRva)(title, artist, album);
+}
+
+void SetDiscNoticeText(void* widget, std::wstring text) {
+    if (!widget || HudField<unsigned>(widget, 0x18) != 2) return;
+    for (auto& ch : text) if (ch < L' ') ch = L' ';
+    if (text.size() > 64) text.resize(64);
+    auto* font = GameFunction<void* (__cdecl*)(std::uint32_t)>(0x185b50)(HudField<std::uint32_t>(widget, 0x24));
+    if (font) {
+        auto width = GameFunction<float (__thiscall*)(void*, const wchar_t*, unsigned)>(0x186210);
+        const auto flags = HudField<unsigned>(widget, 0x1c);
+        if (width(font, text.c_str(), flags) > 275.0f) {
+            do {
+                text.pop_back();
+                if (!text.empty() && text.back() >= 0xd800 && text.back() <= 0xdbff) text.pop_back();
+            } while (!text.empty() && width(font, (text + L"…").c_str(), flags) > 275.0f);
+            text += L"…";
+        }
+    }
+    if (!text.empty() && text.back() >= 0xd800 && text.back() <= 0xdbff) text.pop_back();
+    GameFunction<void (__thiscall*)(void*, const wchar_t*)>(0x1bcd20)(
+        static_cast<std::uint8_t*>(widget) + 0x64, text.c_str());
+    HudField<unsigned>(widget, 0x1c) |= 0x400000u;
+}
+
+void ServiceDiscSongNotice(void* frontend) {
+    const auto sequence = unlimited_discx::Enabled() && unlimited_discx::MusicActive() ?
+        unlimited_discx::TrackSequence() : 0;
+    if (!sequence) {
+        if (discNoticeShown || discNoticeRequested) {
+            SetDiscNoticeBranding(false);
+            if (frontend && FindHudObject(songNoticePackage, 0xa1341735))
+                GameFunction<void (__thiscall*)(void*, const char*)>(0x1169b0)(frontend, songNoticePackage);
+            discNoticeShown = discNoticeRequested = 0;
+        }
+        return;
+    }
+    if (!frontend || !unlimited_discx::PlayingInGameMix() ||
+        sequence == discNoticeShown || GameValue<int>(0x4ee348) > 0) return;
+    if (discNoticeRequested != sequence) {
+        GameFunction<ShowChyron>(showChyronRva)(nullptr, nullptr, nullptr);
+        discNoticeRequested = sequence;
+    }
+    auto* card = GameFunction<void* (__cdecl*)(const char*)>(0x191e90)(songNoticePackage);
+    auto* title = FindHudObject(songNoticePackage, 0xf5387816);
+    auto* artist = FindHudObject(songNoticePackage, 0x11db9e17);
+    auto* album = FindHudObject(songNoticePackage, 0x48097852);
+    if (!card || !title || !artist || !album) return;
+    const auto track = unlimited_discx::NowPlaying();
+    if (track.sequence != sequence) return;
+
+    // The original Start treats its narrow strings as printf formats. Only
+    // give it placeholders for the width class, then write the UTF-16 tags.
+    constexpr std::uintptr_t tagBase = 0x4f3c48;
+    std::array<const char*, 3> original{};
+    const auto placeholder = [](const std::wstring& text) {
+        return std::string(std::min<std::size_t>(40, text.size()), 'M');
+    };
+    const std::array widths{placeholder(track.title), placeholder(track.artist), placeholder(track.album)};
+    for (std::size_t i = 0; i < widths.size(); ++i) {
+        auto& native = GameValue<const char*>(tagBase + i * sizeof(const char*));
+        original[i] = native;
+        native = widths[i].c_str();
+    }
+    GameFunction<void (__thiscall*)(void*)>(0x18d670)(card);
+    for (std::size_t i = 0; i < original.size(); ++i)
+        GameValue<const char*>(tagBase + i * sizeof(const char*)) = original[i];
+
+    SetDiscNoticeText(title, track.title);
+    SetDiscNoticeText(artist, track.artist);
+    SetDiscNoticeText(album, track.album);
+    SetDiscNoticeBranding(true, track.cover);
+    discNoticeShown = sequence;
+}
+
+void InstallDiscxSongRouting() {
+    constexpr std::uintptr_t sites[] = {0xf5001, 0x1644bc, 0x1644e4};
+    const auto replacement = reinterpret_cast<std::uintptr_t>(&ShowStockSongNotice);
+    for (auto site : sites) RedirectCall(site, showChyronRva, replacement);
+}
+
+void __fastcall UpdateFrontendSongNotice(void* frontend, void*, int ticks, unsigned lock) {
+    GameFunction<void (__thiscall*)(void*, int, unsigned)>(0x1c53c0)(frontend, ticks, lock);
+    unlimited_language::ServiceApply();
+    ServiceDiscSongNotice(GameValue<void*>(0x51cadc));
+    if (responsiveSongNoticeEnabled) LayoutSongNotice();
+}
+
+bool InstallResponsiveSongNotice(bool scaleSongNotice) {
     constexpr std::uintptr_t update = 0x1c53c0;
     constexpr std::uintptr_t first = 0x116a0d, second = 0x16441f;
     auto original = GameValue<std::array<std::uint8_t, 5>>(first);
     auto replacement = reinterpret_cast<std::uintptr_t>(&UpdateFrontendSongNotice);
     if (!RedirectCall(first, update, replacement)) return false;
-    if (RedirectCall(second, update, replacement)) return true;
+    if (RedirectCall(second, update, replacement)) {
+        responsiveSongNoticeEnabled = scaleSongNotice;
+        InstallDiscxSongRouting();
+        return true;
+    }
     WriteGameBytes(first, original.data(), original.size());
     return false;
 }

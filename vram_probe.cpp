@@ -11,10 +11,13 @@
 #include <cstdio>
 #include <cstring>
 #include "nfs_controller.hpp"
+#include "nfs_discx.hpp"
 #include "nfs_rumble.hpp"
 #include "renderer-lab/scene_hud_d3d12.hpp"
 #include "renderer-lab/frame_present.hpp"
 #include "nfs_window_mode.hpp"
+#include "third-party/split-screen/integration.hpp"
+#include "nfs_settings.hpp"
 
 namespace {
 constexpr std::uint64_t MiB = 1024 * 1024;
@@ -422,23 +425,23 @@ void __fastcall ChangeFrameLimit(std::uint8_t* option, void*, int, std::int32_t 
 
 using OptionAct = void (__fastcall*)(std::uint8_t*, void*, int, std::int32_t);
 using OptionDraw = void (__fastcall*)(std::uint8_t*);
-void AddUnlimitedVideoOption(std::uint8_t* screen, std::array<void*, 15>& vtable,
+std::uint8_t* AddUnlimitedVideoOption(std::uint8_t* screen, std::array<void*, 15>& vtable,
                              OptionAct change, OptionDraw draw) {
     // Both display packages have 15 authored label/value pairs. The advanced
     // list already occupies more than nine before custom controls are appended.
     const int row=*reinterpret_cast<int*>(screen + 0x104);
-    if (row < 1 || row > 15) return;
+    if (row < 1 || row > 15) return nullptr;
     using FindRowObject = void* (__thiscall*)(std::uint8_t*, const char*);
     const auto findRowObject = GameFunction<FindRowObject>(0x173cc0);
     const auto* prefixes = reinterpret_cast<const char* const*>(screen + 0xb0);
     if (!prefixes[0] || !prefixes[1] ||
-        !findRowObject(screen, prefixes[0]) || !findRowObject(screen, prefixes[1])) return;
+        !findRowObject(screen, prefixes[0]) || !findRowObject(screen, prefixes[1])) return nullptr;
 
     using Allocate = void* (__cdecl*)(std::size_t);
     using ConstructToggle = void (__thiscall*)(void*, bool);
     using AddOption = void (__thiscall*)(std::uint8_t*, void*, int);
     void* option = GameFunction<Allocate>(0x252ad0)(0x5c);
-    if (!option) return;
+    if (!option) return nullptr;
     GameFunction<ConstructToggle>(0x11a8f0)(option, true);
     if (!vtable[0]) {
         std::copy_n(*static_cast<void***>(option), vtable.size(), vtable.begin());
@@ -447,6 +450,7 @@ void AddUnlimitedVideoOption(std::uint8_t* screen, std::array<void*, 15>& vtable
     }
     *static_cast<void***>(option) = vtable.data();
     GameFunction<AddOption>(0x188570)(screen, option, 1);
+    return static_cast<std::uint8_t*>(option);
 }
 
 bool xenonPreference = false;
@@ -536,6 +540,8 @@ void __fastcall ChangeWindowMode(std::uint8_t* option, void*, int, std::int32_t 
     }
 }
 
+#include "nfs_video_options.hpp"
+
 bool FitVideoCalibration(const char* package) {
     if (!package) return false;
     auto* group = FindHudObject(package, 0xad6b204f);
@@ -557,9 +563,13 @@ void __fastcall SetupVideoWithFrameLimit(std::uint8_t* screen, void*) {
     using SetupVideo = void (__thiscall*)(std::uint8_t*);
     GameFunction<SetupVideo>(0x1295f0)(screen);
     static std::array<void*, 15> apiVtable{}, modeVtable{}, fpsVtable{}, xenonVtable{};
-    const bool advanced=screen[0x154]!=0;
+    blurIntensityOption = nullptr;
+    const auto page = screen[0x154];
+    const bool advanced = page != 0;
     const int firstNewRow=HudField<int>(screen,0x104);
-    if(advanced) {
+    if (page == 2) {
+        BuildVideoEffectsPage(screen);
+    } else if(advanced) {
         if(settingsPath[0]) AddUnlimitedVideoOption(screen,apiVtable,&ChangeNativePassOption,&DrawNativePassOption);
     } else {
         if(settingsPath[0] && displayResetInstalled) AddUnlimitedVideoOption(screen,modeVtable,&ChangeWindowMode,&DrawWindowMode);
@@ -567,10 +577,16 @@ void __fastcall SetupVideoWithFrameLimit(std::uint8_t* screen, void*) {
         AddUnlimitedVideoOption(screen,xenonVtable,&ChangeXenonEffects,&DrawXenonEffects);
     }
     const char* package = HudField<const char*>(screen, 0x10);
+    if (effectsPageInstalled && advanced)
+        LabelVideoPageButton(package, page);
     const bool guide = !advanced && FitVideoCalibration(package);
+    if (auto* calibration = package ? FindHudObject(package, 0xad6b204f) : nullptr) {
+        constexpr std::uintptr_t hide = 0x114c70, show = 0x114cc0;
+        GameFunction<void (__cdecl*)(void*)>(advanced ? hide : show)(calibration);
+    }
     if (LogFile log; log.file)
         std::fprintf(log.file, "Graphics menu: package=%s advanced=%u first_new_row=%d next_row=%d calibration_fitted=%u\n",
-                     package ? package : "", advanced,firstNewRow,HudField<int>(screen, 0x104), guide);
+                     package ? package : "", static_cast<unsigned>(page),firstNewRow,HudField<int>(screen, 0x104), guide);
 }
 
 bool InstallFrameLimitMenu() {
@@ -633,6 +649,7 @@ void __cdecl ConfigureDisplayCapabilities() {
     else GameFunction<void (__cdecl*)()>(0x2c1510)();
     // The game has queried D3D caps and will next select the shader variant.
     if (shadowHookInstalled) ConfigureShadowPath();
+    ApplyPostPreferences();
 }
 
 bool InstallDisplayCapabilityHook() {
@@ -1376,6 +1393,7 @@ HRESULT WINAPI ProbeDevice(IDirect3D9* d3d, UINT ordinal, D3DDEVTYPE type, HWND 
     RecordDisplayMode(*device,*parameters,requested);
     trackedDevice = *device;
     gameFocusWindow = window;
+    unlimited_split_screen::SetGameWindow(window);
     nativePassesActive = nativePassesAtStartup != 9 && scene_hud::SupportsDevice(*device);
     nativeMoviePass.SetBackend(nativePassesAtStartup);
     UpdateAspect(parameters->BackBufferWidth, parameters->BackBufferHeight);
@@ -1409,6 +1427,7 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID) {
             engine = executable;
             renderPoolsExpanded = InstallReflectionRenderPools();
             languageBootstrapInstalled = unlimited_language::InstallLanguageBootstrap();
+            unlimited_split_screen::Install(executable);
         }
     }
     return TRUE;
@@ -1423,6 +1442,7 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     wcscat(logPath, L"NFSMW-graphics.log");
     wchar_t mode[8]{};
     LoadFrameLimit();
+    LoadVideoEffectsSettings();
     IDirect3D9* factory = nativePassesAtStartup != 9 ? scene_hud::CreateInteropFactory(SystemD3D9(), sdkVersion) : nullptr;
     displayResetInstalled = InstallGameDisplayReset();
     if (displayResetInstalled)
@@ -1439,7 +1459,8 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     const bool rumble = UnlimitedRumble::Install(executable, settingsPath);
     aspectHookInstalled = InstallAspectCorrection();
     const bool responsiveHud = aspectHookInstalled && InstallResponsiveRaceHud();
-    const bool responsiveSongNotice = aspectHookInstalled && InstallResponsiveSongNotice();
+    const bool frontendServices = InstallResponsiveSongNotice(aspectHookInstalled);
+    const bool responsiveSongNotice = aspectHookInstalled && frontendServices;
     const bool optionLayout = InstallResponsiveOptionLayout();
     const bool moviePresentation = InstallMoviePresentation();
     const bool shadowNative = nativePassFactorySelected && nativePassesAtStartup == 12 && InstallNativeShadowList();
@@ -1449,6 +1470,9 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     const bool timingInstalled = !(timingMode == 5 && wcscmp(mode, L"stock") == 0) &&
                                  InstallUncappedTiming(timingMode == 3 && wcscmp(mode, L"120") == 0 ? 120 : 240);
     const bool frameMenu = installed && timingInstalled && InstallFrameLimitMenu();
+    effectsPageInstalled = frameMenu && settingsPath[0] && InstallVideoEffectsPage();
+    blurIntensityInstalled = InstallMotionBlurIntensity();
+    const bool eaTraxRotation = InstallEATraxDefaults();
     shadowHookInstalled = InstallShadowAllocation();
     const bool displayCaps = InstallDisplayCapabilityHook();
     const bool shadowContinuity = InstallShadowContinuity();
@@ -1462,6 +1486,9 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     const bool textureUpload = InstallFullSizeTextureUpload();
     const bool reflectedLights = InstallRestoredReflectionLights();
     const char* xenonEffects = LoadOptionalXenonEffects();
+    if (LogFile log; log.file)
+        std::fprintf(log.file, "Advanced graphics: effects_page=%u motion_blur_intensity=%u render_scale=%u%% ea_trax_defaults=%u\n",
+                     effectsPageInstalled, blurIntensityInstalled, renderScaleTenths * 10, eaTraxRotation);
     xenonStartup = xenonPreference = settingsPath[0] &&
         GetPrivateProfileIntW(L"Graphics", L"XenonEffects", 0, settingsPath) == 1;
     xenonUnavailable = xenonStartup && std::strcmp(xenonEffects, "enabled") != 0 &&
