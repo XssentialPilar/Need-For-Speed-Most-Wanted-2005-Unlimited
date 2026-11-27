@@ -222,19 +222,16 @@ static float NativeDiscGain(void* sound) {
 
 // Pathfinder is shared by licensed music and the interactive score. Keep its
 // scene decisions, volume graph and events, and replace only the licensed output.
-struct DiscPathMix {
-    bool licensed;
-    bool playable;
-    unsigned volume = 0;
-};
-static thread_local DiscPathMix* g_discPathMix = nullptr;
+static thread_local bool g_muteDiscCarrier = false;
 
 static int __cdecl Hook_DiscPathVolume(int track, int volume) {
-    if (g_discPathMix && g_discPathMix->licensed) {
-        if (g_discPathMix->playable) g_discPathMix->volume = std::clamp(volume, 0, 100);
-        volume = 0;
-    }
-    return ((int(__cdecl*)(int, int))0x82d560)(track, volume);
+    return ((int(__cdecl*)(int, int))0x82d560)(track, g_muteDiscCarrier ? 0 : volume);
+}
+
+static bool DiscLicensedBus(uint8_t* path) {
+    const unsigned phase = At<unsigned>(path, 0x150);
+    return At<int>(0x8f86fc) && phase <= 1 && (At<unsigned>(path, 0x114) & 0xc04) == 4 &&
+           At<int>(path, 0x13c) == 0 && At<int>(path, 0x148) == 0 && At<int>(path, 0x60) != 3;
 }
 
 static void FASTCALL Hook_DiscProcessPathfinder(uint8_t* path, void*) {
@@ -243,19 +240,24 @@ static void FASTCALL Hook_DiscProcessPathfinder(uint8_t* path, void*) {
         process(path);
         return;
     }
+    const bool previous = g_muteDiscCarrier;
+    g_muteDiscCarrier = At<int>(path, 0x13c) == 0 && At<int>(path, 0x148) == 0;
+    process(path);
+    g_muteDiscCarrier = previous;
+
+    // Read the logical bus on every update. PATH_volume only runs while the
+    // silent stock track has a live voice, so it cannot clock Discx playback.
     const auto* movie = At<void*>(0x91cb10);
     const bool playingMovie = movie && ((bool(THISCALL*)(const void*))0x4df9d0)(movie);
-    const bool licensed = At<int>(path, 0x13c) == 0 && At<int>(path, 0x148) == 0;
-    DiscPathMix mix{licensed, !playingMovie};
-    auto* previous = g_discPathMix;
-    g_discPathMix = &mix;
-    process(path);
-    g_discPathMix = previous;
-    // DMIX output 9 is the cutoff passed to SNDSTRM_lowpass in ProcessUpdate.
-    // It carries the stock pursuit-breaker and other music-filter transitions.
     const auto* outputs = At<const unsigned*>(path, 0x10);
-    const unsigned cutoff = outputs ? (outputs[4] >> 16) & 0x7fff : 0;
-    unlimited_discx::SetGameMix(mix.volume, cutoff);
+    if (!DiscLicensedBus(path) || !outputs || playingMovie ||
+        NativeDiscGain(At<void*>(0x911fa8)) <= 0.f) {
+        unlimited_discx::SetGameMix(0, 0);
+        return;
+    }
+    const unsigned volume = (outputs[0] >> (At<unsigned>(path, 0x150) * 16)) & 0x7fff;
+    const unsigned cutoff = (outputs[4] >> 16) & 0x7fff;
+    unlimited_discx::SetGameMix((volume * 100 + 0x3fff) / 0x7fff, cutoff);
 }
 
 struct TraxPlaylist {
@@ -263,7 +265,7 @@ struct TraxPlaylist {
     int last, current, order;
 };
 
-static void FASTCALL Hook_DiscUpdatePathfinder(void* path, void*, float elapsed) {
+static void FASTCALL Hook_DiscUpdatePathfinder(uint8_t* path, void*, float elapsed) {
     const auto update = (void(THISCALL*)(void*, float))0x4e79a0;
     auto* sound = At<uint8_t*>(0x911fa8);
     auto* settings = sound ? At<uint8_t*>(sound, 0x24) : nullptr;
@@ -286,6 +288,14 @@ static void FASTCALL Hook_DiscUpdatePathfinder(void* path, void*, float elapsed)
         temporary |= 1u << i;
     }
     update(path, elapsed);
+    // DMIX normally keys its inputs to the native stream's packet status.
+    // Keep the licensed input active while our own stream supplies the music.
+    if (mode && DiscLicensedBus(path)) {
+        if (auto* inputs = At<unsigned*>(path, 0xc)) {
+            inputs[6] = 0x7fff;
+            inputs[7] = inputs[8] = 0;
+        }
+    }
     for (unsigned i = 0; i < originals.size(); ++i)
         if (temporary & (1u << i)) playlists[i] = originals[i];
     mode = originalMode;

@@ -229,10 +229,10 @@ public:
         if (!locked_ || first != pcm_ || firstBytes != VirtualOffset(firstOutputBytes_) ||
             secondBytes != VirtualOffset(secondOutputBytes_) ||
             (secondBytes && second != pcm_ + firstBytes / sizeof(std::int16_t))) return DSERR_INVALIDPARAM;
-        unlimited_discx::MixNative(pcm_, firstBytes / sourceStride, sourceChannels_, rate_);
+        // Both DirectSound regions share one contiguous staging buffer.
+        unlimited_discx::MixNative(pcm_, (firstBytes + secondBytes) / sourceStride, sourceChannels_, rate_);
         tone_.Convert(pcm_, static_cast<std::int16_t*>(firstTarget_), firstBytes / sourceStride, sourceChannels_, channels_);
         if (secondBytes) {
-            unlimited_discx::MixNative(static_cast<std::int16_t*>(second), secondBytes / sourceStride, sourceChannels_, rate_);
             tone_.Convert(static_cast<std::int16_t*>(second), static_cast<std::int16_t*>(secondTarget_),
                           secondBytes / sourceStride, sourceChannels_, channels_);
         }

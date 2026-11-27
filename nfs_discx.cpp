@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cwchar>
 #include <cwctype>
+#include <deque>
 #include <mutex>
 #include <random>
 #include <thread>
@@ -151,8 +152,11 @@ public:
     }
 
     void Mix(std::int16_t* samples, std::size_t frames, unsigned channels, unsigned rate) {
-        std::unique_lock<std::mutex> guard(musicLock, std::try_to_lock);
-        if (!guard || !outputActive.load(std::memory_order_acquire) || musicPaused || queueRate != rate || !Enabled()) return;
+        // Only a transport reset can contend here. The decoder publishes PCM
+        // through the ring cursors without taking the mixer's lock.
+        std::unique_lock<std::mutex> guard(transportLock, std::try_to_lock);
+        if (!guard || !outputActive.load(std::memory_order_acquire) ||
+            musicPaused.load(std::memory_order_acquire) || queueRate != rate || !Enabled()) return;
         const auto preview = previewGain.load(std::memory_order_relaxed);
         const auto mix = gameMix.load(std::memory_order_relaxed);
         const auto gain = (preview >= 0.f ? preview : (mix & 0xffff) / 100.f) * 32768.f;
@@ -168,10 +172,13 @@ public:
             filterA2 = (1.f - rootTwo * k + k * k) * norm;
             filterCutoff = cutoff;
         }
-        const auto mixed = std::min(frames, available);
+        auto cursor = readFrame.load(std::memory_order_relaxed);
+        const auto ready = writeFrame.load(std::memory_order_acquire) - cursor;
+        const auto mixed = std::min<std::size_t>(frames, ready);
         for (std::size_t frame = 0; frame < mixed; ++frame) {
+            const auto offset = (cursor & (musicFrames - 1)) * 2;
             for (unsigned channel = 0; channel < 2; ++channel) {
-                const float input = pcm[consumed * 2 + channel];
+                const float input = pcm[offset + channel];
                 auto& history = filterHistory[channel];
                 const float output = filtering
                     ? filterB0 * (input + 2.f * history[0] + history[1])
@@ -181,10 +188,10 @@ public:
                 const auto value = samples[channel] + output * gain;
                 samples[channel] = static_cast<std::int16_t>(std::clamp(value, -32768.f, 32767.f));
             }
-            consumed = (consumed + 1) % musicFrames;
+            ++cursor;
             samples += channels;
         }
-        available -= mixed;
+        readFrame.store(cursor, std::memory_order_release);
     }
 
     void Scan() {
@@ -226,42 +233,37 @@ private:
     Catalog catalog;
     Playback status;
     std::vector<Request> pending;
-    static constexpr std::size_t musicFrames = 32768;
-    std::mutex musicLock;
+    static constexpr unsigned musicFrames = 131072;
+    std::mutex transportLock;
     std::array<float, musicFrames * 2> pcm{};
-    std::size_t consumed = 0, available = 0;
+    std::atomic<std::uint32_t> readFrame{0}, writeFrame{0};
     unsigned queueRate = 0;
-    bool musicPaused = true;
+    std::atomic<bool> musicPaused{true};
     unsigned filterCutoff = 0;
     float filterB0 = 0.f, filterA1 = 0.f, filterA2 = 0.f;
     std::array<std::array<float, 4>, 2> filterHistory{};
 
     void ResetMusic(unsigned rate, bool paused) {
-        std::lock_guard<std::mutex> guard(musicLock);
-        consumed = available = 0;
+        std::lock_guard<std::mutex> guard(transportLock);
+        readFrame.store(0, std::memory_order_relaxed);
+        writeFrame.store(0, std::memory_order_relaxed);
         queueRate = rate;
-        musicPaused = paused;
+        musicPaused.store(paused, std::memory_order_release);
         filterHistory = {};
         filterCutoff = 0;
     }
 
-    void PauseMusic(bool paused) {
-        std::lock_guard<std::mutex> guard(musicLock);
-        musicPaused = paused;
+    unsigned Queued() const {
+        return writeFrame.load(std::memory_order_relaxed) - readFrame.load(std::memory_order_acquire);
     }
 
-    std::size_t Queued() {
-        std::lock_guard<std::mutex> guard(musicLock);
-        return available;
-    }
-
-    void Enqueue(const float* samples, std::size_t frames) {
-        std::lock_guard<std::mutex> guard(musicLock);
-        const auto offset = (consumed + available) % musicFrames;
+    void Enqueue(const float* samples, unsigned frames) {
+        const auto cursor = writeFrame.load(std::memory_order_relaxed);
+        const auto offset = cursor & (musicFrames - 1);
         const auto first = std::min(frames, musicFrames - offset);
         std::copy_n(samples, first * 2, pcm.begin() + offset * 2);
         std::copy_n(samples + first * 2, (frames - first) * 2, pcm.begin());
-        available += frames;
+        writeFrame.store(cursor + frames, std::memory_order_release);
     }
 
     Decoder& Codec() {
@@ -323,63 +325,78 @@ private:
         std::shared_ptr<const Tracks> library;
         std::vector<size_t> authored, queue;
         size_t current = 0;
-        Playback currentStatus;
+        struct BufferedTrack {
+            std::uint32_t start;
+            size_t index;
+            Playback status;
+        };
+        std::deque<BufferedTrack> timeline;
         std::uint64_t sequence = 0;
-        bool paused = false, exhausted = false, shuffle = false;
+        bool paused = false, exhausted = false, finished = false, failed = false, shuffle = false;
         Repeat repeat = Repeat::All;
-        double base = 0.;
-        int64_t fed = 0;
         unsigned rate = 0;
         std::mt19937 random(GetTickCount() ^ GetCurrentProcessId());
         std::array<float, 8192> buffer{};
 
-        auto close = [&](bool failed) {
+        auto close = [&](bool error) {
             musicActive.store(false, std::memory_order_release);
             ResetMusic(0, true);
             if (stream) decoder.close(stream);
             stream = nullptr;
-            paused = exhausted = false;
-            currentStatus = {};
-            currentStatus.failed = failed;
+            timeline.clear();
+            paused = exhausted = finished = failed = false;
+            Playback stopped;
+            stopped.failed = error;
+            SetStatus(std::move(stopped));
         };
 
-        auto fill = [&]() {
-            if (!stream || paused || exhausted) return true;
-            const auto target = std::min<std::size_t>(musicFrames - buffer.size() / 2,
-                std::max<unsigned>(8192, rate / 6));
-            while (Queued() < target) {
-                const int frames = decoder.read(stream, buffer.data(), static_cast<int>(buffer.size() / 2));
+        constexpr unsigned decodeBlock = std::tuple_size<decltype(buffer)>::value / 2;
+        auto reserve = [&] { return std::min(musicFrames - decodeBlock, rate + rate / 2); };
+        auto fill = [&](unsigned target) {
+            for (unsigned ready; !exhausted && (ready = Queued()) < target;) {
+                const int frames = decoder.read(stream, buffer.data(), std::min(decodeBlock, musicFrames - ready));
                 if (frames < 0) return false;
                 if (frames == 0) {
                     exhausted = true;
                     break;
                 }
-                fed += frames;
                 Enqueue(buffer.data(), frames);
             }
             return true;
         };
 
-        auto start = [&]() {
-            rate = mixerRate.load(std::memory_order_acquire);
-            if (!decoder.ready || !decoder.openMixer || !rate || !library || queue.empty() || current >= queue.size() ||
-                queue[current] >= library->size()) { close(true); return; }
-            const auto& track = (*library)[queue[current]];
+        auto start = [&](bool append, double position = -1.) {
+            const auto outputRate = mixerRate.load(std::memory_order_acquire);
+            if (!decoder.ready || !decoder.openMixer || !outputRate || (append && outputRate != rate) ||
+                !library || current >= queue.size() || queue[current] >= library->size()) return false;
+            const auto index = queue[current];
+            const auto& track = (*library)[index];
             discx_codec::Metadata metadata;
+            auto* opened = decoder.openMixer(track.path.c_str(), &metadata, outputRate);
+            if (!opened) return false;
+            if (position > 0. && !decoder.seek(opened, position)) {
+                decoder.close(opened);
+                return false;
+            }
             if (stream) decoder.close(stream);
-            ResetMusic(rate, true);
-            stream = decoder.openMixer(track.path.c_str(), &metadata, rate);
-            if (!stream) { close(true); return; }
-            paused = exhausted = false;
-            fed = 0;
-            base = 0.;
-            if (!fill() || !fed) { close(true); return; }
+            stream = opened;
+            if (!append) {
+                rate = outputRate;
+                paused = position >= 0. && paused;
+                ResetMusic(rate, true);
+                timeline.clear();
+            }
+            exhausted = finished = failed = false;
+            const auto first = writeFrame.load(std::memory_order_relaxed);
+            if (!fill(append ? reserve() : rate / 4) ||
+                first == writeFrame.load(std::memory_order_relaxed)) return false;
             std::shared_ptr<const Cover> cover;
             try { cover = ReadCover(decoder, stream); } catch (...) {}
+            timeline.push_back({first, index, {track.metadata.title, track.metadata.artist, track.metadata.album, track.path,
+                std::max(0., position), metadata.duration, true, paused, false, ++sequence, std::move(cover)}});
             musicActive.store(true, std::memory_order_release);
-            PauseMusic(false);
-            currentStatus = { track.metadata.title, track.metadata.artist, track.metadata.album, track.path,
-                              0., metadata.duration, true, false, false, ++sequence, std::move(cover) };
+            musicPaused.store(paused, std::memory_order_release);
+            return true;
         };
 
         auto rebuild = [&](size_t selected) {
@@ -393,10 +410,28 @@ private:
             }
         };
 
+        auto positionOf = [&](size_t index) {
+            const auto found = std::find(queue.begin(), queue.end(), index);
+            return found == queue.end() ? size_t{} : static_cast<size_t>(found - queue.begin());
+        };
+        auto advanceTimeline = [&] {
+            const auto frame = readFrame.load(std::memory_order_acquire);
+            while (timeline.size() > 1 && frame - timeline[1].start < 0x80000000u) timeline.pop_front();
+            return frame;
+        };
+        auto open = [&](bool append) {
+            if (start(append)) return;
+            if (append) {
+                finished = failed = true;
+            } else {
+                close(true);
+            }
+        };
         auto next = [&](bool automatic) {
             if (queue.empty()) return;
-            if (automatic && repeat == Repeat::One) { start(); return; }
-            if (current + 1 < queue.size()) { ++current; start(); return; }
+            if (!automatic && !timeline.empty()) current = positionOf(timeline.front().index);
+            if (automatic && repeat == Repeat::One) { open(true); return; }
+            if (current + 1 < queue.size()) { ++current; open(automatic); return; }
             if (!automatic || repeat == Repeat::All) {
                 if (shuffle && queue.size() > 1) {
                     const auto old = queue[current];
@@ -404,26 +439,29 @@ private:
                     if (queue[0] == old) std::swap(queue[0], queue[1]);
                 }
                 current = 0;
-                start();
-            } else close(false);
+                open(automatic);
+            } else {
+                finished = true;
+            }
         };
 
         for (;;) {
             std::vector<Request> requests;
             {
                 std::unique_lock<std::mutex> guard(lock);
-                if (stream && !paused) wake.wait_for(guard, std::chrono::milliseconds(8), [&] { return !pending.empty(); });
+                if (!timeline.empty() && !paused) wake.wait_for(guard, std::chrono::milliseconds(8), [&] { return !pending.empty(); });
                 else wake.wait(guard, [&] { return !pending.empty(); });
                 requests.swap(pending);
             }
             for (auto& request : requests) {
+                advanceTimeline();
                 switch (request.action) {
                 case Action::Play:
                     library = std::move(request.library);
                     authored = std::move(request.order);
                     if (authored.empty()) { close(false); break; }
                     rebuild(static_cast<size_t>(request.value));
-                    start();
+                    open(false);
                     break;
                 case Action::Shuffle:
                     if (const auto wanted = request.value != 0; shuffle != wanted) {
@@ -434,34 +472,55 @@ private:
                     break;
                 case Action::Repeat: repeat = static_cast<Repeat>(int(request.value)); break;
                 case Action::Previous:
-                    if (!queue.empty()) { current = current == 0 ? queue.size() - 1 : current - 1; start(); }
+                    if (!queue.empty()) {
+                        if (!timeline.empty()) current = positionOf(timeline.front().index);
+                        current = current == 0 ? queue.size() - 1 : current - 1;
+                        open(false);
+                    }
                     break;
                 case Action::Next: next(false); break;
                 case Action::Pause:
-                    if (stream) PauseMusic(paused = !paused);
+                    if (stream) musicPaused.store(paused = !paused, std::memory_order_release);
                     break;
                 case Action::Stop: close(false); break;
                 case Action::Seek:
-                    if (stream && std::isfinite(request.value) && request.value >= 0 &&
-                        decoder.seek(stream, request.value)) {
-                        ResetMusic(rate, paused);
-                        base = request.value;
-                        fed = 0;
-                        exhausted = false;
+                    if (!timeline.empty() && std::isfinite(request.value) && request.value >= 0) {
+                        const auto saved = current;
+                        current = positionOf(timeline.front().index);
+                        if (!start(false, request.value)) {
+                            current = saved;
+                            if (timeline.empty()) close(true);
+                        }
                     }
                     break;
                 }
             }
-            if (stream && (mixerRate.load(std::memory_order_acquire) != rate || !fill())) close(true);
-            if (stream) {
-                const auto queued = Queued();
-                if (exhausted && !paused && queued == 0) next(true);
-                else {
-                    currentStatus.paused = paused;
-                    currentStatus.position = base + std::max(0., (fed - static_cast<double>(queued)) / rate);
-                }
+            if (timeline.empty()) continue;
+            const auto outputRate = mixerRate.load(std::memory_order_acquire);
+            if (outputRate && outputRate != rate) {
+                // Reopen the audible track at the same position after a rate change.
+                const auto frame = advanceTimeline();
+                const auto& active = timeline.front();
+                current = positionOf(active.index);
+                if (!start(false, active.status.position + double(frame - active.start) / rate)) close(true);
+                continue;
             }
-            SetStatus(currentStatus);
+            if (!paused && outputRate && !finished) {
+                if (!exhausted && Queued() < reserve() * 2 / 3 && !fill(reserve())) finished = failed = true;
+                // Append the next track while the current track's tail is still
+                // queued. Its metadata becomes current when the mixer reaches it.
+                if (exhausted && !finished && timeline.size() < 2) next(true);
+            }
+            if (finished && Queued() == 0) {
+                close(failed);
+                continue;
+            }
+            const auto frame = advanceTimeline();
+            const auto& active = timeline.front();
+            auto playback = active.status;
+            playback.paused = paused;
+            playback.position += double(frame - active.start) / rate;
+            SetStatus(std::move(playback));
         }
     }
 };

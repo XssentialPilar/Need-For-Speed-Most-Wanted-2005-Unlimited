@@ -191,6 +191,7 @@ extern "C" __declspec(dllexport) int __cdecl DiscCX_Read(Stream* stream, float* 
             const int converted = swr_convert(reader.converter, &packed, frames, input, count);
             reader.offset += count;
             if (converted != 0) return converted;
+            if (reader.offset < reader.frame->nb_samples) continue;
         }
 
         av_frame_unref(reader.frame);
