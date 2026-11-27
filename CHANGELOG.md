@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.0.1
+
+This maintenance release fixes audio dropouts in **EAX Discx** during gameplay and at automatic track changes.
+
+### EAX Discx fixes
+
+- The decoder refills the playback buffer without blocking the game mixer. A larger buffer absorbs short decoder stalls.
+- The next track is buffered before the current one ends. Discx also keeps playing when the original EA Trax stream cycles.
+- The decoder preserves pending input samples when resampling audio.
+
+### Installation
+
+Close the game and run **NFSMW-Unlimited-Setup.exe** over your current Unlimited installation. For a fresh installation, select the original PC game folder with a supported 1.3 `speed.exe`. Setup includes the 295 HD resource files and preserves existing settings and music. Use **SHA256SUMS.txt** to verify the download.
+
+### Verification
+
+A two-player split-screen race logged zero dropped PCM frames across 1,059,456 frames and six automatic track changes, including a forced restart of the EA Trax stream. A separate test logged zero missing frames during an injected 450 ms decoder stall. The complete installer passed offline installation and reinstall checks.
+
 ## v1.0.0
 
 The first official release of **Need for Speed Most Wanted 2005 Unlimited** brings the HD interface, local split screen, and custom music together in one offline installer for the original PC game.
