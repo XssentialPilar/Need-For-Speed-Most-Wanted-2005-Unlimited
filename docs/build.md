@@ -74,4 +74,4 @@ i686-w64-mingw32-clang++ -std=c++17 -O2 -static -municode tests/profile_store.cp
 & "$env:TEMP/profile-store-test.exe" 'C:/QA/ValidProfileCopy' 'C:/QA/UnlimitedProfileTest-New'
 ```
 
-The repository carries the source and build recipes. Prepare compatible retail data and asset packages locally.
+The repository carries the source and build recipes. Prepare compatible retail data and asset packages locally. Setup includes the Unlimited MIT notice and the applicable notices for bundled components. Use the upstream terms for external inputs and their derived assets when distributing a build. [Project license](../LICENSE) · [Credits and licensing scope](../CREDITS.md#licensing-scope)

@@ -11,7 +11,7 @@
 
 ## Xbox 360 Stuff Pack 4.2
 
-The **Complex Installation** package contains 330 files. Its readme identifies release 4.2. The first installer script retains a 4.1 label. [Author's package and source links](https://nfsmods.xyz/mod/1200)
+The **Complex Installation** package from the Xbox 360 Stuff Pack team supplies the authored rendering component, shaders, scripts and assets used by this integration. Unlimited implements the verified PC import pipeline, in-game controls and per-player rendering integration. The package contains 330 files and its readme identifies release 4.2. The first installer script retains a 4.1 label. [Upstream package and downloads](https://nfsmods.xyz/mod/1200) · [Attribution](CREDITS.md#upstream-projects-and-assets)
 
 ### Native assets in Unlimited
 
@@ -29,7 +29,7 @@ The **Complex Installation** package contains 330 files. Its readme identifies r
 
 ### World shaders on DirectX 9
 
-Select **DirectX 9** and enable **Xbox 360 effects** in the video settings, then restart the game. Unlimited initializes the rendering component from version 4.2 inside the game process. The component supplies the scene techniques and material inputs for car paint, reflective roads and windows, foliage, water, sky and exposure. Unlimited controls the cameras and fits the HUD to each player's viewport.
+Select **DirectX 9** and enable **Xbox 360 effects** in the video settings, then restart the game. The build stages the upstream 4.2 rendering component as `World360.dll`, with its shader lookup and startup entry adapted for Unlimited. The upstream renderer supplies the scene techniques and material inputs for car paint, reflective roads and windows, foliage, water, sky and exposure. Unlimited initializes the component, selects the appropriate shader set and coordinates the per-player world and HUD passes.
 
 To choose an effect set, set `X360WorldShaders` under `[Graphics]` in `NFSMW-Unlimited.ini` and restart.
 
