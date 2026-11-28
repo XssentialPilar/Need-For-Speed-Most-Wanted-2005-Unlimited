@@ -29,9 +29,8 @@ void LoadVideoEffectsSettings() {
     renderScaleTenths = std::clamp(read(L"RenderScaleTenths", LowThreadBudget() ? 8 : 10), int(minRenderScale), int(maxRenderScale));
     rearviewEffects = static_cast<RearviewEffects>(std::clamp(read(rearviewEffectsKey, 0), 0, 2));
     unlimited_textures::Open(settingsPath);
-    using Quality = unlimited_textures::Quality;
     unlimited_textures::preference = unlimited_textures::ReadQuality(read(unlimited_textures::preferenceKey, 0));
-    unlimited_textures::startup = unlimited_textures::remaster.count ? unlimited_textures::preference : Quality::Original;
+    unlimited_textures::startup = unlimited_textures::preference;
     unlimited_split_screen::SetRenderScale(renderScaleTenths);
 }
 

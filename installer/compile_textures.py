@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -245,6 +246,16 @@ def map_images(root, work):
     return assets
 
 
+def deduplicate_images(assets):
+    canonical = {}
+    replacements = {}
+    for asset in dict.fromkeys(assets.values()):
+        content = hashlib.sha256(read_pixels(asset)).digest()
+        key = (asset.size, asset.format, asset.width, asset.height, asset.levels, content)
+        replacements[asset] = canonical.setdefault(key, asset)
+    return {texture_id: replacements[asset] for texture_id, asset in assets.items()}
+
+
 def write_pack(assets, output):
     table_end = HEADER.size + len(assets) * RECORD.size
     offsets = {}
@@ -384,6 +395,7 @@ def main():
     parser.add_argument("--world-global", type=Path, help="PC or console GlobalB archive for the window texture")
     parser.add_argument("--xbox-complex", type=Path, metavar="STOCK_GAME",
                         help="Compile a Complex Installation folder against the installed PC resource names")
+    parser.add_argument("--deduplicate-content", action="store_true", help="Store identical mip chains once")
     args = parser.parse_args()
     with TemporaryDirectory(prefix="unlimited-textures-") as tmp:
         work = Path(tmp)
@@ -410,6 +422,8 @@ def main():
         if args.xbox_barriers:
             world_global = args.world_global or (source if args.xbox_effects else None)
             assets.update(map_console_embedded(args.xbox_barriers, world_global, work))
+        if args.deduplicate_content:
+            assets = deduplicate_images(assets)
         destination = args.output.resolve()
         temporary = destination.with_suffix(".bin.building")
         try:

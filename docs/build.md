@@ -4,7 +4,7 @@ Use a Windows machine with Git for Windows, PowerShell, LLVM-MinGW (including `i
 
 Run the commands from the repository root.
 
-## Public runtime installer
+## Runtime-only development build
 
 ```powershell
 ./installer/build.ps1 -RuntimeOnly -OutputDirectory ./dist/v1.1.0-beta.1
@@ -46,6 +46,22 @@ $consoleInputs = @{
 ```
 
 The second command creates `NFSMW-Unlimited-Console-Update.exe` for an existing installation with the Unlimited console texture bank. It carries the runtime, decoder and updated console renderer data. The build reports the specific source record or checksum that prevented staging if an input is incompatible. [Xbox 360 asset inventory and runtime settings](../xbox-360-integration.md)
+
+## Compact all-in-one installer
+
+Use the same console inputs as the complete build.
+
+```powershell
+./installer/build.ps1 @consoleInputs -Compact -OutputDirectory ./dist/compact
+```
+
+The compact build creates **NFSMW-Unlimited-Compact-Setup.exe**. It works on a supported PC 1.3 game directory and combines the HD interface, controller and DISCX support, console engine sounds, and the console updater's renderer, shaders, garage assets and visual databases in one installer.
+
+Setup generates the alternate track archive from the included UPS delta and the verified stock PC stream. It retains an existing alternate archive and logs when an incompatible or missing stock stream prevents generation.
+
+The package omits the 8K remaster and the console soundtrack bank. It retains the texture quality selector. With Xbox 360 effects active, the profiles apply to the available console textures. Higher settings use the largest available mip level up to the existing console cap of 2048 pixels. The original PC soundtrack is used when a compatible console music bank is unavailable. Setup preserves previously installed optional banks.
+
+The compact build stores each identical console mip chain once and keeps the full set of texture IDs. It includes the FFmpeg source and the applicable third-party notices.
 
 ## Verification by area
 

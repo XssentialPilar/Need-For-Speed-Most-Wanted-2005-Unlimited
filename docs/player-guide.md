@@ -6,20 +6,21 @@ Unlimited is a community patch for the original Windows PC 1.3 release of Need f
 
 | Situation | Download |
 | --- | --- |
-| You want the latest stable, complete HD installer | [Stable release](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/latest) |
-| You want to test the current beta on a supported PC installation | [v1.1.0-beta.1 runtime installer](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/tag/v1.1.0-beta.1) |
-| You build your own complete installer with compatible asset packages | [Build guide](build.md) |
+| You want one installer with the HD interface, DISCX, split screen and Xbox 360 graphics | [Compact installer (501.7 MB)](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Compact-Setup.exe) |
+| You also want the 8K texture remaster and Xbox 360 soundtrack | [Full installer (2.7 GB) on Google Drive](https://drive.google.com/drive/folders/1l_FDzXc2m_Aq71TXzJtKQNYlowg-eF3g?usp=sharing) |
+| Your Unlimited installation already has the Xbox 360 texture bank | [Console update (255 MB) on Google Drive](https://drive.google.com/drive/folders/1l_FDzXc2m_Aq71TXzJtKQNYlowg-eF3g?usp=sharing) |
+| You want the Google Drive links and instructions in another language | [Download guide ZIP, 12 languages](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Download-Guide.zip) |
 
-The public beta installer contains the runtime, DISCX decoder, controller support, and the XenonEffects add-on. It works on a supported plain PC installation and can update an existing Unlimited installation. It also offers optional import of a verified HD resource directory and compatible HD cutscenes. The remastered texture bank and complete Xbox 360 Stuff Pack integration require separately prepared assets.
+The compact installer includes the same console graphics integration and engine sounds as the complete edition. It keeps the seven texture quality choices and uses the installed texture data. The game's original PC soundtrack is used when a compatible console soundtrack bank is unavailable.
 
-## Install or update the beta
+## Install or update
 
 1. Close Most Wanted. Copy `Documents\NFS Most Wanted` and, if present, `Documents\Unlimited Save Recovery` somewhere safe.
-2. Download `NFSMW-Unlimited-Runtime-Setup.exe` and `SHA256SUMS.txt` from the beta release. To verify the installer, run `Get-FileHash .\NFSMW-Unlimited-Runtime-Setup.exe -Algorithm SHA256` in PowerShell and compare the result with the published checksum.
-3. Run Setup and select the folder containing the supported `speed.exe`. Leave the optional asset fields blank to install the runtime on its own.
-4. Open the game. DirectX 9 is the default for a fresh installation. Changes to the renderer, texture profile and audio output take effect after a restart.
+2. Download one installer. To verify the compact installer, run `Get-FileHash .\NFSMW-Unlimited-Compact-Setup.exe -Algorithm SHA256` in PowerShell and compare the result with [SHA256SUMS.txt](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/SHA256SUMS.txt).
+3. Run Setup and select the folder containing the supported PC 1.3 `speed.exe`. If you downloaded the Drive guide ZIP, extract it and open the README for your language before downloading an installer.
+4. Launch the game. Select DirectX 9 and enable **Xbox 360 effects** in Video to use the console renderer. Restart after changing the render API, console effects, texture quality or audio output.
 
-Setup retains an existing `NFSMW-Unlimited.ini` and user music. It keeps original copies of replaced files in `UnlimitedCommunity\BeforeUnlimited`. On a supported 64-bit Windows installation, Setup can enable Large Address Aware on the verified x86 executable, backing up the original file.
+Setup retains an existing `NFSMW-Unlimited.ini` and user music. It keeps original copies of replaced files in `UnlimitedCommunity\BeforeUnlimited`. On supported 64-bit Windows, Setup enables Large Address Aware on the verified x86 executable and backs up the original.
 
 ## Local split screen
 

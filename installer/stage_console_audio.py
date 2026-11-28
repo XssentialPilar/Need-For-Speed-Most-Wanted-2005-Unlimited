@@ -53,10 +53,12 @@ def main():
     parser.add_argument("source", type=Path)
     parser.add_argument("stock", type=Path)
     parser.add_argument("destination", type=Path)
+    parser.add_argument("--engines-only", action="store_true", help="Stage engine sounds without the music bank")
     args = parser.parse_args()
     source = args.source / "ModData" / "Files" / "SOUND"
     stock = args.stock / "SOUND"
-    check_music(source / "PFDATA", stock / "PFDATA")
+    if not args.engines_only:
+        check_music(source / "PFDATA", stock / "PFDATA")
 
     original = {path.name.casefold(): path for path in (stock / "ENGINE").glob("*.gin")}
     records = []
@@ -73,8 +75,9 @@ def main():
     if not records:
         raise ValueError("The package does not contain any engine sound replacements")
 
-    for ext in ("mpf", "mus"):
-        shutil.copyfile(source / "PFDATA" / f"MW_Music.{ext}", args.destination / f"X3_Music.{ext}")
+    if not args.engines_only:
+        for ext in ("mpf", "mus"):
+            shutil.copyfile(source / "PFDATA" / f"MW_Music.{ext}", args.destination / f"X3_Music.{ext}")
     (args.destination / "console-engine-checksums.tsv").write_text("".join(records), encoding="ascii")
     print(f"Console engines: {len(records)} validated PC sound slots")
 

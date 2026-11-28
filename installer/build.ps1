@@ -9,11 +9,16 @@ param(
     [string]$XboxAttribulator,
     [string]$XboxDotnet,
     [switch]$ConsoleUpdateOnly,
-    [switch]$RuntimeOnly
+    [switch]$RuntimeOnly,
+    [switch]$Compact
 )
 
 $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot
+if ($Compact -and (-not $XboxComplexDirectory -or -not $XboxGlobal -or -not $XboxAttribulator -or
+                   $RuntimeOnly -or $ConsoleUpdateOnly -or $TextureArchive)) {
+    throw 'Compact setup requires the console inputs (XboxComplexDirectory, XboxGlobal, XboxAttribulator) and excludes TextureArchive, RuntimeOnly, and ConsoleUpdateOnly.'
+}
 if ($RuntimeOnly -and $HudGameDirectory) {
     throw 'Use either -RuntimeOnly or -HudGameDirectory.'
 }
@@ -77,6 +82,10 @@ try {
         $defines += '/DRuntimeOnlyBuild'
         $filename = 'NFSMW-Unlimited-Runtime-Setup.exe'
     } else {
+        if ($Compact) {
+            $defines += '/DCompactBuild'
+            $filename = 'NFSMW-Unlimited-Compact-Setup.exe'
+        }
         $sourceRoot = (Resolve-Path -LiteralPath $HudGameDirectory).Path
         $manifestPath = Join-Path $PSScriptRoot 'upscaled-hud-checksums.tsv'
         $manifest = Import-Csv -LiteralPath $manifestPath -Delimiter "`t" -Header Relative, Original, HD
@@ -108,16 +117,32 @@ try {
     }
     if ($XboxComplexDirectory) {
         if (-not $ConsoleUpdateOnly) {
-            & py.exe -3 (Join-Path $PSScriptRoot 'compile_textures.py') $console (Join-Path $stage 'UnlimitedXboxTextures.bin') --xbox-complex $gameData
+            $textureArgs = @('--xbox-complex', $gameData)
+            $audioArgs = @()
+            if ($Compact) {
+                $textureArgs += '--deduplicate-content'
+                $audioArgs += '--engines-only'
+            }
+            & py.exe -3 (Join-Path $PSScriptRoot 'compile_textures.py') $console (Join-Path $stage 'UnlimitedXboxTextures.bin') @textureArgs
             if ($LASTEXITCODE) { throw "Console texture compilation failed ($LASTEXITCODE)" }
-            & py.exe -3 (Join-Path $PSScriptRoot 'stage_console_audio.py') $console $gameData $stage
+            & py.exe -3 (Join-Path $PSScriptRoot 'stage_console_audio.py') $console $gameData $stage @audioArgs
             if ($LASTEXITCODE) { throw "Console audio staging failed ($LASTEXITCODE)" }
-            Copy-Item -LiteralPath (Join-Path $console 'LICENSE') -Destination (Join-Path $stage 'Xbox360Stuff-LICENSE.txt')
+            if (-not $Compact) {
+                Copy-Item -LiteralPath (Join-Path $console 'LICENSE') -Destination (Join-Path $stage 'Xbox360Stuff-LICENSE.txt')
+            }
             $defines += '/DEmbeddedConsolePack'
         }
-        & py.exe -3 (Join-Path $PSScriptRoot 'stage_console_track.py') (Join-Path $gameData 'TRACKS/STREAML2RA.BUN') (Join-Path $console 'Install-Part-3.ups') (Join-Path $stage 'STREAML2X6.BUN')
-        if ($LASTEXITCODE) { throw "Console track staging failed ($LASTEXITCODE)" }
-        $defines += '/DEmbeddedConsoleTrack'
+        $trackDelta = Join-Path $console 'Install-Part-3.ups'
+        if ($Compact) {
+            if ((Get-FileHash -LiteralPath $trackDelta).Hash -ne '62202B1B3D7AFB3CA8B285D326A06E6A3ABE063A22FC58127737C2CE63199849') {
+                throw 'Unsupported console track delta'
+            }
+            Copy-Item -LiteralPath $trackDelta -Destination (Join-Path $stage 'ConsoleTrack.ups')
+        } else {
+            & py.exe -3 (Join-Path $PSScriptRoot 'stage_console_track.py') (Join-Path $gameData 'TRACKS/STREAML2RA.BUN') $trackDelta (Join-Path $stage 'STREAML2X6.BUN')
+            if ($LASTEXITCODE) { throw "Console track staging failed ($LASTEXITCODE)" }
+            $defines += '/DEmbeddedConsoleTrack'
+        }
         $defines += '/DEmbeddedConsolePlatforms'
         if ($XboxAttribulator) {
             $vaultArgs = @('--attribulator', $XboxAttribulator)

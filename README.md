@@ -2,21 +2,22 @@
 
 Unlimited is a community patch for the 2005 PC release of Need for Speed Most Wanted. It adds an HD interface, local split screen for up to four players, graphics and display controls, and an in-game player for your own music.
 
-[Stable downloads](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/latest) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/issues)
+[Latest release](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/latest) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/issues)
 
 ## Downloads and setup
 
-| Channel | Use it for |
+| Download | When to use it |
 | --- | --- |
-| [v1.1.0-beta.1](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/tag/v1.1.0-beta.1) | The latest runtime changes, save recovery, DISCX, and split-screen testing |
-| [Stable release](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/latest) | The stable complete HD installer |
+| [Compact installer (v1.1.0-beta.1, 501.7 MB)](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Compact-Setup.exe) | Recommended for most players. Includes the HD interface, DISCX, local split screen and Xbox 360 graphics and engine sounds. The 8K remaster and Xbox 360 soundtrack are supplied with the complete edition. |
+| [Full installer and console update on Google Drive](https://drive.google.com/drive/folders/1l_FDzXc2m_Aq71TXzJtKQNYlowg-eF3g?usp=sharing) | Choose the full installer (2.7 GB) for the complete edition. Choose the console update (255 MB) if Unlimited is already installed with the Xbox 360 texture bank. |
+| [Download guide ZIP, 12 languages](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Download-Guide.zip) | Contains the Google Drive link and instructions for choosing and running either installer. |
 
-1. Close the game and back up your profiles.
-2. Download the installer and `SHA256SUMS.txt` from your chosen release. In PowerShell, run `Get-FileHash` on the installer and compare its SHA-256 with the published value.
-3. Run Setup and select the existing PC 1.3 installation folder containing `speed.exe`.
-4. Launch the game normally. Restart after changing the graphics API, texture profile or audio output.
+1. Close Most Wanted and back up your saved profiles.
+2. Download the installer for your installation. Use [SHA256SUMS.txt](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/SHA256SUMS.txt) to verify GitHub downloads. The compact installer is a single Windows executable.
+3. Run Setup, select the folder containing the supported PC 1.3 `speed.exe`, and launch the game when Setup completes.
+4. To use Xbox 360 graphics, select DirectX 9, turn on **Xbox 360 effects** in the Video menu, and restart the game.
 
-Setup targets Windows 7 SP1 or later on systems that run x86 applications. It checks the executable and keeps original copies of replaced files in `UnlimitedCommunity/BeforeUnlimited`. The public beta runtime includes an optional HD importer. Build the complete asset integration locally using the matching input directories. [Player guide](docs/player-guide.md) · [Build guide](docs/build.md)
+Setup targets Windows 7 SP1 or later on systems that run x86 applications. It checks the installed game executable and keeps original copies of replaced files in `UnlimitedCommunity/BeforeUnlimited`. [Release notes](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/tag/v1.1.0-beta.1) · [Player guide](docs/player-guide.md) · [Build guide](docs/build.md)
 
 ## Saved profiles
 
@@ -83,7 +84,7 @@ A setup built with the remaster embeds the texture data in `GLOBAL/UnlimitedText
 
 ## HD interface and cutscenes
 
-- The stable complete installer and complete local builds embed the verified Unlimited HD profile and apply it offline. The profile contains LunicAura106's Upscaled HUD and supplemental resources prepared from the game installation. [Upscaled HUD by LunicAura106](https://nfsmods.xyz/mod/1096)
+- The compact and complete installers embed the verified Unlimited HD profile and apply it offline. The profile contains LunicAura106's Upscaled HUD and supplemental resources prepared from the game installation. [Upscaled HUD by LunicAura106](https://nfsmods.xyz/mod/1096)
 - To import replacement cutscenes you have prepared, choose the folder containing the HD VP6 files or pass `/HDMOVIES="C:\Games\HD Movies"`. Setup verifies the original filename, video dimensions, frame rate, and packet structure before copying to `MOVIES_HD`. The original movies stay in place.
 
 ## Reporting an issue

@@ -31,6 +31,10 @@ Uninstallable=no
 OutputBaseFilename=NFSMW-Unlimited-Console-Update
 VersionInfoDescription=Unlimited Xbox 360 Integration Update
 Compression=lzma2/fast
+#elif Defined(CompactBuild)
+OutputBaseFilename=NFSMW-Unlimited-Compact-Setup
+VersionInfoDescription=Unlimited Compact Setup with Xbox 360 Integration
+Compression=lzma2/max
 #elif Defined(RuntimeOnlyBuild)
 OutputBaseFilename=NFSMW-Unlimited-Runtime-Setup
 VersionInfoDescription=Unlimited Runtime Setup
@@ -72,11 +76,18 @@ Source: "{#BuildPayload}\UnlimitedTextures.bin"; DestDir: "{app}\GLOBAL"; Flags:
 #endif
 #ifdef EmbeddedConsolePack
 Source: "{#BuildPayload}\UnlimitedXboxTextures.bin"; DestDir: "{app}\GLOBAL"; Flags: ignoreversion solidbreak
+#ifndef CompactBuild
 Source: "{#BuildPayload}\X3_Music.mpf"; DestDir: "{app}\SOUND\PFDATA"; Flags: ignoreversion
 Source: "{#BuildPayload}\X3_Music.mus"; DestDir: "{app}\SOUND\PFDATA"; Flags: ignoreversion solidbreak
+#endif
 Source: "{#BuildPayload}\console-engine-checksums.tsv"; Flags: dontcopy
 Source: "{#BuildPayload}\*.xgin"; Flags: dontcopy
+#ifndef CompactBuild
 Source: "{#BuildPayload}\Xbox360Stuff-LICENSE.txt"; DestDir: "{app}\UnlimitedCommunity"; Flags: ignoreversion
+#endif
+#endif
+#ifdef CompactBuild
+Source: "{#BuildPayload}\ConsoleTrack.ups"; Flags: dontcopy
 #endif
 #ifdef EmbeddedConsoleTrack
 Source: "{#BuildPayload}\STREAML2X6.BUN"; DestDir: "{app}\TRACKS"; Flags: ignoreversion solidbreak

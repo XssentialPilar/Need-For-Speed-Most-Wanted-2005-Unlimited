@@ -125,6 +125,99 @@ static BOOL read_exact(HANDLE file, void *data, DWORD size) {
     return ReadFile(file, data, size, &bytes, NULL) && bytes == size;
 }
 
+typedef ULONG (WINAPI *ComputeCrc32)(ULONG, const void *, ULONG);
+
+static DWORD load_le32(const BYTE *bytes) {
+    return (DWORD)bytes[0] | ((DWORD)bytes[1] << 8) |
+           ((DWORD)bytes[2] << 16) | ((DWORD)bytes[3] << 24);
+}
+
+static BOOL read_ups_number(const BYTE *patch, DWORD end, DWORD *cursor, DWORD *out) {
+    ULONGLONG value = 0, weight = 1;
+    for (unsigned i = 0; i < 5 && *cursor < end; ++i) {
+        const BYTE byte = patch[(*cursor)++];
+        value += (byte & 127u) * weight;
+        if (byte & 128u) {
+            if (value > MAXDWORD) return FALSE;
+            *out = (DWORD)value;
+            return TRUE;
+        }
+        weight <<= 7;
+        value += weight;
+    }
+    return FALSE;
+}
+
+static BOOL apply_track_delta(BYTE *track, DWORD track_size, const BYTE *patch, DWORD end, DWORD cursor) {
+    DWORD offset = 0;
+    while (cursor < end) {
+        DWORD distance;
+        if (offset >= track_size || !read_ups_number(patch, end, &cursor, &distance) ||
+            distance >= track_size - offset || cursor == end || !patch[cursor]) return FALSE;
+        offset += distance;
+        while (cursor < end && patch[cursor]) {
+            if (offset >= track_size) return FALSE;
+            track[offset++] ^= patch[cursor++];
+        }
+        if (cursor == end) return FALSE;
+        ++cursor;
+        ++offset;
+    }
+    return TRUE;
+}
+
+enum { track_patch_size = 5078 };
+
+static BOOL stage_console_track(const wchar_t *source, const wchar_t *delta, const wchar_t *output, BYTE *patch) {
+    enum { track_size = 532663556, table_end = track_patch_size - 12 };
+    const DWORD stock_crc = 0xbd947661u, console_crc = 0xae90f386u;
+    ComputeCrc32 crc = (ComputeCrc32)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlComputeCrc32");
+    if (!crc) return FALSE;
+
+    LARGE_INTEGER size;
+    HANDLE file = CreateFileW(delta, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return FALSE;
+    BOOL ok = GetFileSizeEx(file, &size) && size.QuadPart == track_patch_size && read_exact(file, patch, track_patch_size);
+    CloseHandle(file);
+    if (!ok || load_le32(patch) != 0x31535055u || load_le32(patch + table_end) != stock_crc ||
+        load_le32(patch + table_end + 4) != console_crc ||
+        crc(0, patch, track_patch_size - 4) != load_le32(patch + track_patch_size - 4)) return FALSE;
+
+    DWORD cursor = 4, before, after;
+    if (!read_ups_number(patch, table_end, &cursor, &before) || before != track_size ||
+        !read_ups_number(patch, table_end, &cursor, &after) || after != track_size ||
+        !CopyFileW(source, output, TRUE)) return FALSE;
+
+    file = CreateFileW(output, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    HANDLE mapping = NULL;
+    BYTE *track = NULL;
+    ok = FALSE;
+    if (file != INVALID_HANDLE_VALUE && GetFileSizeEx(file, &size) && size.QuadPart == track_size) {
+        mapping = CreateFileMappingW(file, NULL, PAGE_READWRITE, 0, 0, NULL);
+        if (mapping) track = MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, track_size);
+        ok = track && crc(0, track, track_size) == stock_crc &&
+             apply_track_delta(track, track_size, patch, table_end, cursor) &&
+             crc(0, track, track_size) == console_crc && FlushViewOfFile(track, track_size);
+    }
+    if (track) UnmapViewOfFile(track);
+    if (mapping) CloseHandle(mapping);
+    if (file != INVALID_HANDLE_VALUE) {
+        ok = ok && FlushFileBuffers(file);
+        CloseHandle(file);
+    }
+    if (!ok) DeleteFileW(output);
+    return ok;
+}
+
+BOOL WINAPI StageConsoleTrack(const wchar_t *source, const wchar_t *delta, const wchar_t *output) {
+    HANDLE heap = GetProcessHeap();
+    BYTE *patch = HeapAlloc(heap, 0, track_patch_size);
+    if (!patch) return FALSE;
+    const BOOL ok = stage_console_track(source, delta, output, patch);
+    HeapFree(heap, 0, patch);
+    return ok;
+}
+
 BOOL WINAPI EnableLargeAddressCopy(const wchar_t *path) {
     HANDLE file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (file == INVALID_HANDLE_VALUE) return FALSE;

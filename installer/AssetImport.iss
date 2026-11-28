@@ -368,12 +368,19 @@ begin
   end;
 end;
 
+#ifdef CompactBuild
+#include "ConsoleTrackImport.iss"
+#endif
+
 procedure CurStepChanged(Step: TSetupStep);
 begin
   if Step = ssPostInstall then
     try
       ApplyAssetImport;
       EnableLargeAddressMode;
+      #ifdef CompactBuild
+      InstallConsoleTrack;
+      #endif
     except
       AssetImportError := True;
       Log('HD asset import failed: ' + GetExceptionMessage);

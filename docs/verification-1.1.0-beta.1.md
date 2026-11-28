@@ -22,7 +22,8 @@ The baseline was the installed local build immediately before the performance ch
 
 ## Public installer and profile storage
 
-- The published runtime installer passed a PC 1.3 fixture installation and reinstall. The test verified the executable backup, the installed controller modules, the single DISCX decoder and its source bundle, and retention of existing settings and custom music.
+- The initial runtime-only installer passed a PC 1.3 fixture installation and reinstall. The test verified the executable backup, the installed controller modules, the single DISCX decoder and its source bundle, and retention of existing settings and custom music.
+- The compact installer passed a clean installation and reinstall. It retained the 295 HD resources, 87 engine sounds, and all 722 console texture IDs. In game, all seven quality choices remained visible and the same sampled texture loaded at 256 px on Very Low and 1,024 px on Ultra.
 - The profile store test passed create, replace, integrity validation, contention, interrupted staging, recovery, damaged backups, rotation, and detection of conflicting edits.
 
 ## Optional assets and game modes

@@ -1563,7 +1563,7 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     const bool cursorScaling = InstallHdCursorScale();
     const bool filtering = InstallTextureFiltering();
     const bool textureUpload = InstallFullSizeTextureUpload();
-    unlimited_textures::installed = textureUpload && unlimited_textures::remaster.count != 0;
+    unlimited_textures::installed = textureUpload;
     if (textureUpload) unlimited_textures::InstallEffectDemandHook();
     if (LogFile log; log.file)
         std::fprintf(log.file, "Texture quality: profile=%u entries=%u console_entries=%u upload=%u\n",

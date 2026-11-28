@@ -2,7 +2,13 @@
 
 ## v1.1.0-beta.1
 
-This public pre-release introduces native save recovery, makes Xbox 360 world effects available to each local player when the optional assets are present, and updates the display and soundtrack controls. The release download is the runtime installer. Existing Unlimited installations can keep their asset banks. The repository includes the complete build recipes for users who supply the matching assets.
+This beta introduces native save recovery, Xbox 360 world effects in local split screen, and updates to the display and soundtrack controls. The release offers the compact all-in-one installer and a 12-language guide to the full installer and console update. [Downloads](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/tag/v1.1.0-beta.1)
+
+### Compact distribution
+
+- Combines the HD interface, runtime, Xbox 360 graphics and engine sounds, and the console update in a single 501.7 MB installer.
+- The complete edition supplies the optional 8K remaster and Xbox 360 soundtrack. The compact edition retains all seven texture quality choices and applies the saved profile to installed textures.
+- The compact installer generates the verified alternate track from a small delta against the stock PC track archive and shares storage for byte-identical console mip chains. [Compact build instructions](docs/build.md#compact-all-in-one-installer)
 
 ### Save integrity and recovery
 
@@ -51,7 +57,7 @@ This public pre-release introduces native save recovery, makes Xbox 360 world ef
 ### Installation, testing and known issues
 
 - The public installer targets a supported PC 1.3 installation. It keeps existing Unlimited preferences and user music. Setup checks the game folder and supports optional local import of matching HD resources and compatible VP6 movies.
-- The complete local build verified 295 HD assets and their originals, 87 engine sounds, two console music files, 722 console texture records, four shader profiles and two visual databases. The local console update preserved the tested executable, texture bank and settings.
+- The complete build verified 295 HD assets and their originals, 87 engine sounds, two console music files, 722 console texture records, four shader profiles and two visual databases. The console update preserved the tested executable, texture bank and settings.
 - The same benchmark showed lower race FPS with vertical sync active. In the tested scene, it fell from 156.5 to 147.3 FPS. The sync-off run rose from 143.9 to 145.8 FPS. These are measurements from the tested machine and scene.
 - DirectX 11, DirectX 12 and Vulkan presentation remain experimental. Coverage for physical controllers, all courses and every weather and graphics combination remains limited.
 - The optional alternate track archive defaults to off due to known compatibility issues in some modes. The beta is intended for testing with a backup of your profile. [Player guide](docs/player-guide.md) · [Verification](docs/verification-1.1.0-beta.1.md)
