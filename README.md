@@ -20,6 +20,10 @@ Unlimited builds on Abdullah374's restoration of the PC split-screen code and hi
 - **Display and interface.** Choose fullscreen, windowed or borderless mode, set an FPS cap or select **Unlimited**, and change the 3D scene resolution independently of the HUD. The HD interface scales with the display, and the in-game language selector can reload installed languages and save subtitle preferences. [Display and performance](docs/player-guide.md#display-and-performance)
 - **Save protection.** Unlimited prevents failed or incomplete writes from corrupting your save and costing you career progress. It validates each manual save and autosave before replacing the active profile and checks for conflicting external edits. If the active file is damaged, Unlimited can recover progress from a verified, compatible revision. [Save recovery guide](docs/save-recovery.md)
 
+### Stability, performance and load times
+
+Unlimited fixes a crash during save error handling, improves texture streaming during graphics resets, and groups resource reads to reduce loading overhead. In the beta's tested DirectX 9 setup, median menu frame time fell from 16.67 ms to 5.55 ms with vertical sync on, and time to gameplay fell from 4.32 s to 4.21 s with vertical sync off and a warm file cache. Work continues on stability, frame pacing and load times across hardware and graphics settings. [Beta measurements and test conditions](docs/verification-1.1.0-beta.1.md)
+
 ## Downloads and setup
 
 Current release **v1.1.0-beta.1**. Setup requires a supported PC 1.3 installation on Windows 7 SP1 or later with x86 application support.
