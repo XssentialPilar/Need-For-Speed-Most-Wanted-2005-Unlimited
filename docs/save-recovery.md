@@ -1,5 +1,7 @@
 # Saved profiles and recovery
 
+Unlimited protects the player's career progress from save corruption. If a save is interrupted or fails validation, the previous valid profile stays in place. Verified revisions provide a recovery point if the active file is damaged.
+
 The game continues to read and write the native PC 1.3 profile under `Documents\NFS Most Wanted\<profile>\<profile>`. Unlimited stages manual saves and autosaves in a temporary file, validates the resulting native container, and publishes it with an atomic replacement. It checks whether another process changed the profile before the new save is committed.
 
 ## Recover a profile

@@ -1,6 +1,6 @@
 # Need for Speed Most Wanted 2005 Unlimited
 
-**Unlimited is an unofficial engine patch for Need for Speed: Most Wanted (2005), PC 1.3, developed by XssentialPilar.** It integrates compatible Xbox 360 and remaster assets into the PC game's own loading and rendering systems, extends local split screen, and adds DISCX, new display controls and save recovery.
+**Unlimited is an unofficial engine patch for Need for Speed: Most Wanted (2005), PC 1.3, developed by XssentialPilar.** It integrates compatible Xbox 360 and remaster assets into the PC game's own loading and rendering systems, extends local split screen, and adds DISCX, new display controls and protection against save corruption.
 
 [Latest release](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/latest) · [Player guide](docs/player-guide.md) · [Changelog](CHANGELOG.md) · [Credits](CREDITS.md) · [MIT license](LICENSE)
 
@@ -18,7 +18,7 @@ Unlimited builds on Abdullah374's restoration of the PC split-screen code and hi
 
 - **DISCX and Unlimited Matrix.** Play your own music through the game's mixer, song controls and native song card with embedded cover art. The interactive score retains priority when requested by the game. Stereo output offers **Unlimited Matrix**, which encodes the 5.1 mix as stereo Lt/Rt for compatible matrix decoders. [Music and audio settings](docs/player-guide.md#discx-and-sound)
 - **Display and interface.** Choose fullscreen, windowed or borderless mode, set an FPS cap or select **Unlimited**, and change the 3D scene resolution independently of the HUD. The HD interface scales with the display, and the in-game language selector can reload installed languages and save subtitle preferences. [Display and performance](docs/player-guide.md#display-and-performance)
-- **Save protection.** Unlimited validates manual saves and autosaves before replacing the native PC profile, keeps known-good revisions, and can recover a compatible save. It detects external edits to protect the on-disk version from conflicting writes. [Save recovery guide](docs/save-recovery.md)
+- **Save protection.** Unlimited prevents failed or incomplete writes from corrupting your save and costing you career progress. It validates each manual save and autosave before replacing the active profile and checks for conflicting external edits. If the active file is damaged, Unlimited can recover progress from a verified, compatible revision. [Save recovery guide](docs/save-recovery.md)
 
 ## Downloads and setup
 
