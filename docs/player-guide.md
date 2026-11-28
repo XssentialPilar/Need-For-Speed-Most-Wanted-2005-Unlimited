@@ -7,11 +7,11 @@ Unlimited is a community patch for the original Windows PC 1.3 release of Need f
 | Situation | Download |
 | --- | --- |
 | You want one installer with the HD interface, DISCX, split screen and Xbox 360 graphics | [Compact installer (501.7 MB)](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Compact-Setup.exe) |
-| You also want the 8K texture remaster and Xbox 360 soundtrack | [Full installer (2.7 GB) on Google Drive](https://drive.google.com/drive/folders/1l_FDzXc2m_Aq71TXzJtKQNYlowg-eF3g?usp=sharing) |
+| You want the most complete edition, with the 8K texture remaster and Xbox 360 soundtrack | [Full installer (2.7 GB) on Google Drive](https://drive.google.com/drive/folders/1l_FDzXc2m_Aq71TXzJtKQNYlowg-eF3g?usp=sharing) |
 | Your Unlimited installation already has the Xbox 360 texture bank | [Console update (255 MB) on Google Drive](https://drive.google.com/drive/folders/1l_FDzXc2m_Aq71TXzJtKQNYlowg-eF3g?usp=sharing) |
 | You want the Google Drive links and instructions in another language | [Download guide ZIP, 12 languages](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Download-Guide.zip) |
 
-The compact installer includes the same console graphics integration and engine sounds as the complete edition. It keeps the seven texture quality choices and uses the installed texture data. The game's original PC soundtrack is used when a compatible console soundtrack bank is unavailable.
+The compact installer includes the same console graphics integration and engine sounds as the complete edition. It omits the 8K remaster and Xbox 360 soundtrack. It keeps all seven texture quality choices and uses the installed texture data. The game's original PC soundtrack is used when a compatible console soundtrack bank is unavailable.
 
 ## Install or update
 

@@ -8,8 +8,8 @@ Unlimited is a community patch for the 2005 PC release of Need for Speed Most Wa
 
 | Download | When to use it |
 | --- | --- |
-| [Compact installer (v1.1.0-beta.1, 501.7 MB)](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Compact-Setup.exe) | Recommended for most players. Includes the HD interface, DISCX, local split screen and Xbox 360 graphics and engine sounds. The 8K remaster and Xbox 360 soundtrack are supplied with the complete edition. |
-| [Full installer and console update on Google Drive](https://drive.google.com/drive/folders/1l_FDzXc2m_Aq71TXzJtKQNYlowg-eF3g?usp=sharing) | Choose the full installer (2.7 GB) for the complete edition. Choose the console update (255 MB) if Unlimited is already installed with the Xbox 360 texture bank. |
+| [Compact installer (v1.1.0-beta.1, 501.7 MB)](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Compact-Setup.exe) | Recommended for most players. Includes the HD interface, DISCX, local split screen and Xbox 360 graphics and engine sounds. This edition omits the 8K remaster and Xbox 360 soundtrack. |
+| [Full installer and console update on Google Drive](https://drive.google.com/drive/folders/1l_FDzXc2m_Aq71TXzJtKQNYlowg-eF3g?usp=sharing) | Choose the full installer (2.7 GB) for the most complete edition, including the 8K remaster and Xbox 360 soundtrack. Choose the console update (255 MB) if Unlimited is already installed with the Xbox 360 texture bank. |
 | [Download guide ZIP, 12 languages](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Download-Guide.zip) | Contains the Google Drive link and instructions for choosing and running either installer. |
 
 1. Close Most Wanted and back up your saved profiles.
