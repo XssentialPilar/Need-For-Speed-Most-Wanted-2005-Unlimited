@@ -85,6 +85,71 @@ bool InstallImprovedCarDetail() {
            WriteGameBytes(thresholdTable, improved, sizeof(improved));
 }
 
+enum class RearviewEffects { Stock, Lights, Particles };
+constexpr wchar_t rearviewEffectsKey[] = L"RearviewEffects";
+RearviewEffects rearviewEffects = RearviewEffects::Stock;
+bool rearviewEffectsInstalled = false;
+
+void __cdecl RenderRearviewLights(void* view, int flags) {
+    if (rearviewEffects != RearviewEffects::Stock && GameValue<int>(gameFlowStateRva) == 6)
+        GameFunction<void (__cdecl*)(void*)>(0x107770)(view);
+    using DrawFlares = void (__cdecl*)(void*, int);
+    reinterpret_cast<DrawFlares>(&GameValue<std::uint8_t>(0x105e80))(view, flags);
+}
+
+void __cdecl RenderRearviewParticles(void* view, int flags, int quality) {
+    GameFunction<void (__cdecl*)(void*, int, int)>(0x350b00)(view, flags, quality);
+    if (rearviewEffects == RearviewEffects::Particles && GameValue<int>(gameFlowStateRva) == 6) {
+        auto* emitters = &GameValue<std::uint8_t>(0x5166c0);
+        GameFunction<void (__thiscall*)(void*, void*)>(0x103d00)(emitters, view);
+    }
+}
+
+bool InstallRearviewEffects() {
+    // These calls run with the mirror's viewport, targets and camera already
+    // bound. The game's mirror visibility and native effect checks still apply.
+    constexpr std::uintptr_t lightsSite = 0x2de9f0, particlesSite = 0x2de9d9;
+    constexpr std::uint8_t lightsCall[]{0xe8, 0x8b, 0x74, 0xe2, 0xff};
+    constexpr std::uint8_t particlesCall[]{0xe8, 0x22, 0x21, 0x07, 0x00};
+    if (!MatchGameBytes(lightsSite, lightsCall, sizeof(lightsCall)) ||
+        !MatchGameBytes(particlesSite, particlesCall, sizeof(particlesCall))) return false;
+    if (!RedirectCall(lightsSite, 0x105e80, reinterpret_cast<std::uintptr_t>(&RenderRearviewLights)))
+        return false;
+    if (RedirectCall(particlesSite, 0x350b00, reinterpret_cast<std::uintptr_t>(&RenderRearviewParticles)))
+        return true;
+    WriteGameBytes(lightsSite, lightsCall, sizeof(lightsCall));
+    return false;
+}
+
+bool InstallRearviewCameraVisibility() {
+    // The HUD checks the camera preset, and the single-player view selector
+    // separately rejects the exterior camera mover. Let both use the native
+    // visibility decision, including the gameplay setting, pause and look-back.
+    constexpr std::uintptr_t hudCameraCheck = 0x195dda;
+    constexpr std::uint8_t hudExpected[] = {
+        0x83, 0xf8, 0x02, 0x74, 0x2d, 0x83, 0xf8, 0x03, 0x74, 0x28,
+        0x83, 0xf8, 0x04, 0x74, 0x23, 0x83, 0xf8, 0x05, 0x74, 0x1e,
+        0x83, 0xf8, 0x06, 0x74, 0x19,
+    };
+    constexpr std::uintptr_t enterMirror = 0x2cfb72, keepMirror = 0x2cfbc5;
+    constexpr std::uint8_t enterExpected[] = {0xff, 0x50, 0x24, 0x84, 0xc0, 0x75, 0x66};
+    constexpr std::uint8_t keepExpected[] = {0xff, 0x52, 0x24, 0x84, 0xc0, 0x75, 0x0d};
+    if (!MatchGameBytes(hudCameraCheck, hudExpected, sizeof(hudExpected)) ||
+        !MatchGameBytes(enterMirror - 5, enterExpected, sizeof(enterExpected)) ||
+        !MatchGameBytes(keepMirror - 5, keepExpected, sizeof(keepExpected))) return false;
+
+    constexpr std::uint8_t skipExteriorPresetChecks[] = {0xeb, sizeof(hudExpected) - 2};
+    constexpr std::uint8_t useVisibilityCheck[] = {0x90, 0x90};
+    if (!WriteGameBytes(hudCameraCheck, skipExteriorPresetChecks, sizeof(skipExteriorPresetChecks)))
+        return false;
+    if (WriteGameBytes(enterMirror, useVisibilityCheck, sizeof(useVisibilityCheck))) {
+        if (WriteGameBytes(keepMirror, useVisibilityCheck, sizeof(useVisibilityCheck))) return true;
+        WriteGameBytes(enterMirror, enterExpected + 5, sizeof(useVisibilityCheck));
+    }
+    WriteGameBytes(hudCameraCheck, hudExpected, sizeof(skipExteriorPresetChecks));
+    return false;
+}
+
 constexpr UINT MirrorTargetEdge(UINT width, UINT height, UINT limit) {
     const auto canvasWidth = std::min<std::uint64_t>(width, std::uint64_t{height} * 4 / 3);
     const UINT desired = canvasWidth >= 2500 ? 1024 : canvasWidth >= 1300 ? 512 : 256;
@@ -155,6 +220,27 @@ __attribute__((naked)) void RequireMirrorForComposition() {
         "jne 1f\n"
         "xorb %al, %al\n"
         "1: ret\n");
+}
+
+using MirrorDraw = void (__cdecl*)(std::uint8_t*, void*, int);
+MirrorDraw nativeMirrorDraw = nullptr;
+
+void __cdecl DrawResponsiveMirror(std::uint8_t* quad, void* texture, int flags) {
+    // The stock compositor uses four 16-byte vertices in canvas coords.
+    // Its render target already contains the glass, mask and frame.
+    if (aspectHookInstalled && !unlimited_split_screen::RaceActive()) {
+        const float shift = FitTopEdge(activeLayout.hudY);
+        for (unsigned vertex = 0; vertex < 4; ++vertex)
+            *reinterpret_cast<float*>(quad + vertex * 16 + 4) += shift;
+    }
+    nativeMirrorDraw(quad, texture, flags);
+}
+
+bool InstallResponsiveMirrorComposition(MirrorDraw draw) {
+    const auto target = reinterpret_cast<std::uintptr_t>(draw) - reinterpret_cast<std::uintptr_t>(engine);
+    if (!RedirectCall(0x2e7199, target, reinterpret_cast<std::uintptr_t>(&DrawResponsiveMirror))) return false;
+    nativeMirrorDraw = draw;
+    return true;
 }
 
 bool InstallAdaptiveRearviewMirror() {

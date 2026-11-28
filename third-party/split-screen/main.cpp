@@ -393,6 +393,8 @@ static void FASTCALL Hook_QueuePackageSwitch(void* fe, void*, const char* name, 
         // split screen race: menus (pause, options, ...) accept every player's controller
         if (cfg.p2MenuInput && SplitRaceSetup() && *G::pSimUserMode == 1 && *G::pGameFlowState == 6) mask |= 7;
     }
+    // The native jukebox may be entered through any of the carousel's input paths.
+    if (name && !_stricmp(name, "EA_Trax_Jukebox.fng")) unlimited_discx::SelectStockMusic();
     if (name) snprintf(g_lastPkg, sizeof g_lastPkg, "%s", name);
     g_qpsTramp(fe, name, arg, mask, b);
 }
@@ -576,12 +578,7 @@ static bool MakeIconTexture(IDirect3DDevice9* device, EmbeddedIcon& icon, const 
     return true;
 }
 
-template<class Pixel>
-static void* GetEmbeddedIcon(EmbeddedIcon& icon, uint32_t baseHash, uint32_t hash, const char* name,
-                             const Pixel* coverage, unsigned edge) {
-    const auto* base = static_cast<const uint8_t*>(g_gtiTramp(baseHash, 0, 0));
-    if (!base || !*reinterpret_cast<void* const*>(base) || !MakeIconTexture(Dev(), icon, coverage, edge))
-        return nullptr;
+static void* RegisterEmbeddedTexture(EmbeddedIcon& icon, const uint8_t* base, uint32_t hash, const char* name) {
     if (base != icon.base) {
         memcpy(icon.info, base, 0x7c);
         memcpy(icon.platform, *reinterpret_cast<void* const*>(base), sizeof(icon.platform));
@@ -598,10 +595,23 @@ static void* GetEmbeddedIcon(EmbeddedIcon& icon, uint32_t baseHash, uint32_t has
         At<void*>(info, 0x6c) = info;
         At<void*>(info, 0x70) = At<void*>(info, 0x74) = nullptr;
         icon.base = base;
-        Log("Frontend texture ready: %s (%u px)", name, edge);
+        D3DSURFACE_DESC desc{};
+        if (SUCCEEDED(icon.texture->GetLevelDesc(0, &desc)))
+            Log("Frontend texture ready: %s (%ux%u px)", name, desc.Width, desc.Height);
     }
     return icon.info;
 }
+
+template<class Pixel>
+static void* GetEmbeddedIcon(EmbeddedIcon& icon, uint32_t baseHash, uint32_t hash, const char* name,
+                             const Pixel* coverage, unsigned edge) {
+    const auto* base = static_cast<const uint8_t*>(g_gtiTramp(baseHash, 0, 0));
+    if (!base || !*reinterpret_cast<void* const*>(base) || !MakeIconTexture(Dev(), icon, coverage, edge))
+        return nullptr;
+    return RegisterEmbeddedTexture(icon, base, hash, name);
+}
+
+#include "discx_tab.inc"
 
 static void* __cdecl Hook_GetTextureInfo(uint32_t hash, int useDefault, int b) {
     constexpr const uint8_t* splitCoverage[] = {splitTwoAlpha, splitThreeAlpha, splitFourAlpha};
@@ -614,7 +624,7 @@ static void* __cdecl Hook_GetTextureInfo(uint32_t hash, int useDefault, int b) {
     }
     if (hash == TEX_DISCX) {
         constexpr uint32_t stockIcon = 0xc52ccbf6;
-        if (auto* icon = GetEmbeddedIcon(g_discxIcon, stockIcon, hash, "OPTIONS_ICON_EAX_DISCX", discxIconAlpha, 128))
+        if (auto* icon = GetEmbeddedIcon(g_discxIcon, stockIcon, hash, "OPTIONS_ICON_DISCX", discxIconAlpha, 128))
             return icon;
         hash = stockIcon;
     } else if (hash == unlimited_split_screen::discxNoticeCoverHash) {
@@ -631,7 +641,7 @@ static void* __cdecl Hook_GetTextureInfo(uint32_t hash, int useDefault, int b) {
             }
         }
         if (g_discCover && loaded == g_discCover) {
-            if (auto* icon = GetEmbeddedIcon(cover, original, hash, "EAX_DISCX_COVER",
+            if (auto* icon = GetEmbeddedIcon(cover, original, hash, "DISCX_HUD_COVER",
                                             loaded->data(), unlimited_discx::coverEdge))
                 return icon;
         }
@@ -640,14 +650,29 @@ static void* __cdecl Hook_GetTextureInfo(uint32_t hash, int useDefault, int b) {
         constexpr uint32_t stockBadge = 0x000004e5;
         static EmbeddedIcon empty;
         constexpr uint8_t transparent[8 * 8]{};
-        if (auto* icon = GetEmbeddedIcon(empty, stockBadge, hash, "EAX_DISCX_EMPTY", transparent, 8))
+        if (auto* icon = GetEmbeddedIcon(empty, stockBadge, hash, "DISCX_HUD_EMPTY", transparent, 8))
             return icon;
         hash = stockBadge;
     } else if (hash == unlimited_split_screen::discxNoticeTabHash) {
         constexpr uint32_t stockTab = 0x575221d4;
-        static EmbeddedIcon tab;
-        if (auto* icon = GetEmbeddedIcon(tab, stockTab, hash, "EAX_DISCX_HUD_TAB", discxTabArgb, 128))
-            return icon;
+        struct DiscTab {
+            EmbeddedIcon icon;
+            IDirect3DTexture9* source = nullptr;
+        };
+        static DiscTab menuTab, raceTab;
+        auto& tab = *G::pGameFlowState == 3 ? menuTab : raceTab;
+        auto* base = static_cast<uint8_t*>(g_gtiTramp(stockTab, 0, 0));
+        auto* source = FindNativeTexture(base);
+        try {
+            if (source) {
+                if (tab.source != source || tab.icon.base != base) {
+                    if (!BuildDiscTab(tab.icon, source)) return base;
+                    tab.source = source;
+                    tab.icon.base = nullptr;
+                }
+                return RegisterEmbeddedTexture(tab.icon, base, hash, "DISCX_HUD_TAB");
+            }
+        } catch (const std::bad_alloc&) {}
         hash = stockTab;
     } else if (hash == unlimited_split_screen::languageIconHash) {
         constexpr uint32_t stockIcon = 0x4df98fb2;
@@ -1146,7 +1171,6 @@ static void FASTCALL Hook_OptionsNotify(void* self, void*, uint32_t msg, void* o
         if (selected && obj == At<void*>(selected, 0x10)) {
             const auto title = At<uint32_t>(selected, 0x2c);
             if (title == STR_DISCX && OpenDiscScreen(self)) return;
-            if (title == 0xdcfb6b36) unlimited_discx::SelectStockMusic();
         }
     }
     o_OptionsNotify(self, msg, obj, p1, p2);
@@ -1179,7 +1203,7 @@ static void InstallStringHook() {
         { STR_AIDIFF, g_strAIDiff, "Dificultad de IA" },
         { STR_THREEPLAYER, "3-player split screen", "Pantalla dividida para 3" },
         { STR_FOURPLAYER, "4-player split screen", "Pantalla dividida para 4" },
-        { STR_DISCX, "EAX Discx", "EAX Discx" },
+        { STR_DISCX, "DISCX", "DISCX" },
     };
     uint8_t* t = (uint8_t*)VirtualAlloc(nullptr, 256, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!t) return;
@@ -1372,9 +1396,30 @@ __attribute__((naked)) static void Hook_WorldPostBoundary() {
         "ret\n");
 }
 
+// The console renderer continues with its own post-processing chain here.
+__attribute__((naked)) static void ResolveBeforeConsolePost() {
+    asm volatile(
+        "pushfl\n"
+        "pushal\n"
+        "call _SplitResolveWorldBeforePost\n"
+        "popal\n"
+        "popfl\n"
+        "pushl $0x6df8ab\n"
+        "ret\n");
+}
+
 static bool InstallWorldPostBoundary() {
     constexpr uintptr_t address = 0x6DF5E7;
     constexpr uint8_t original[] = {0x8b, 0x15, 0xfc, 0x17, 0x90, 0x00};
+    constexpr uint8_t consoleContinue[] = {0xe9, 0xbf, 0x02, 0, 0};
+    if (GetModuleHandleW(L"World360.dll") &&
+        !memcmp(reinterpret_cast<const void*>(address), consoleContinue, sizeof consoleContinue)) {
+        uint8_t jump[5] = {0xe9};
+        const auto displacement = reinterpret_cast<uintptr_t>(&ResolveBeforeConsolePost) - (address + sizeof(jump));
+        memcpy(jump + 1, &displacement, sizeof displacement);
+        WriteMem(address, jump, sizeof jump);
+        return !memcmp(reinterpret_cast<const void*>(address), jump, sizeof jump);
+    }
     if (memcmp(reinterpret_cast<const void*>(address), original, sizeof original)) {
         Log("World post-processing boundary unavailable");
         return false;
@@ -1387,7 +1432,13 @@ static bool InstallWorldPostBoundary() {
 }
 
 // Render the world with the pixel budget of this player's part of the output.
+static bool g_drawingPlayerPane = false;
 static void RenderScaledWorld(bool split) {
+    struct PaneScope {
+        bool previous;
+        ~PaneScope() { g_drawingPlayerPane = previous; }
+    } scope{g_drawingPlayerPane};
+    g_drawingPlayerPane = split;
     const auto render = (G::VoidFn)o_DisplayInner;
     auto* target = At<uint8_t*>(G::View(1), G::EV_RT);
     auto* d = Dev();
@@ -1742,6 +1793,8 @@ void unlimited_split_screen::SetPostPreferences(int filters, int motionBlur) {
     g_filtersPreference = filters;
     g_blurPreference = motionBlur;
 }
+
+bool unlimited_split_screen::DrawingPlayerPane() { return g_drawingPlayerPane; }
 
 bool unlimited_split_screen::RaceActive() {
     return installed && SplitRaceSetup() && *G::pSimUserMode == 1 && *G::pGameFlowState == 6;

@@ -14,6 +14,7 @@ var
   AssetEdits: array[0..1] of TNewEdit;
   Assets: array of TAsset;
   AssetImportError: Boolean;
+  ConsoleEngineAssets: Integer;
 
 function MoveAsset(Source, Target: string; Flags: LongWord): LongWord;
   external 'MoveFileExW@kernel32.dll stdcall setuponly';
@@ -187,11 +188,50 @@ begin
   if Found then Result := '';
 end;
 
+#ifdef EmbeddedConsolePack
+procedure PrepareConsoleEngineImport(GameRoot: string);
+var
+  Manifest: TArrayOfString;
+  I, TabAt: Integer;
+  Line, Relative, Original, Expected, Current, Source: string;
+  Extracted: Boolean;
+begin
+  ExtractTemporaryFile('console-engine-checksums.tsv');
+  if not LoadStringsFromFile(ExpandConstant('{tmp}\console-engine-checksums.tsv'), Manifest) then
+    RaiseException(CustomMessage('AssetImportFailed'));
+  Extracted := False;
+  for I := 0 to GetArrayLength(Manifest) - 1 do begin
+    Line := Manifest[I];
+    if Line = '' then Continue;
+    TabAt := Pos(#9, Line);
+    Relative := Copy(Line, 1, TabAt - 1);
+    Original := Copy(Line, TabAt + 1, 64);
+    Expected := Copy(Line, TabAt + 66, 64);
+    Current := AssetDigest(GameRoot + Relative);
+    if Current = Expected then Continue;
+    if Current <> Original then begin
+      Log('Kept engine sound outside the supported PC baseline: ' + Relative);
+      Continue;
+    end;
+    if not Extracted then begin
+      ExtractTemporaryFiles('*.xgin');
+      Extracted := True;
+    end;
+    Source := ExpandConstant('{tmp}\') + Expected + '.xgin';
+    if AssetDigest(Source) <> Expected then
+      RaiseException(FmtMessage(CustomMessage('AssetConflict'), [Relative]));
+    QueueAsset(Source, Relative, Current, Expected);
+    ConsoleEngineAssets := ConsoleEngineAssets + 1;
+  end;
+end;
+#endif
+
 function PrepareAssetImport: string;
 var
   GameRoot: string;
 begin
   SetArrayLength(Assets, 0);
+  ConsoleEngineAssets := 0;
   Result := '';
   GameRoot := AddBackslash(WizardDirValue);
   try
@@ -203,6 +243,9 @@ begin
     #endif
     if (Result = '') and (Trim(AssetEdits[1].Text) <> '') then
       Result := PrepareMovieImport(Trim(AssetEdits[1].Text), GameRoot);
+    #ifdef EmbeddedConsolePack
+    if Result = '' then PrepareConsoleEngineImport(GameRoot);
+    #endif
   except
     Result := CustomMessage('AssetImportFailed');
   end;
@@ -257,7 +300,9 @@ begin
           RaiseException(FmtMessage(CustomMessage('AssetConflict'), [Assets[I].Relative]));
         Applied := Applied + 1;
       end;
-      Log('Verified HD assets installed: ' + IntToStr(Applied));
+      Log('Verified HD assets installed: ' + IntToStr(Applied - ConsoleEngineAssets));
+      if ConsoleEngineAssets > 0 then
+        Log('Verified console engine sounds installed: ' + IntToStr(ConsoleEngineAssets));
     except
       for I := Applied - 1 downto 0 do begin
         Target := GameRoot + Assets[I].Relative;
@@ -282,11 +327,53 @@ begin
   end;
 end;
 
+function EnableLargeAddressCopy(Path: string): LongWord;
+  external 'EnableLargeAddressCopy@files:unlimited-setup-private.dll stdcall delayload setuponly';
+
+const
+  OriginalHash = '80774c2e5d619b4f120b48d4462896fd504c263399d203a238769cffde1d253c';
+  EnabledHash = 'bde12bdd158b7f861078ad4527f5a656f34c6068e4a2120f28044f92f0fa158c';
+
+procedure EnableLargeAddressMode;
+var
+  Root, Target, Stage, Temporary, CurrentHash: string;
+begin
+  if not IsWin64 then Exit;
+  Root := AddBackslash(WizardDirValue);
+  Target := Root + 'speed.exe';
+  CurrentHash := LowerCase(GetSHA256OfFile(Target));
+  if CurrentHash = EnabledHash then begin
+    Log('Large address mode is already enabled.');
+    Exit;
+  end;
+  if CurrentHash <> OriginalHash then Exit;
+  Stage := Root + 'UnlimitedCommunity\SetupExe-' + GetDateTimeString('yyyymmddhhnnss', '/', ':');
+  if CreateAssetStage(Stage, 0) = 0 then begin
+    Log('Could not stage large address mode. Original executable retained.');
+    Exit;
+  end;
+  try
+    BackupOriginal('speed.exe');
+    Temporary := AddBackslash(Stage) + 'speed.new';
+    if not CopyFile(Target, Temporary, True) or (EnableLargeAddressCopy(Temporary) = 0) or
+      (VerifyGameDirectory(WizardDirValue) <> 0) or
+      (LowerCase(GetSHA256OfFile(Target)) <> OriginalHash) or
+      (MoveAsset(Temporary, Target, ReplaceAndFlush) = 0) then
+      Log('Could not enable large address mode. Original executable retained.')
+    else
+      Log('Enabled large address mode for the verified PC 1.3 executable.');
+  finally
+    if Temporary <> '' then DeleteFile(Temporary);
+    RemoveDir(Stage);
+  end;
+end;
+
 procedure CurStepChanged(Step: TSetupStep);
 begin
   if Step = ssPostInstall then
     try
       ApplyAssetImport;
+      EnableLargeAddressMode;
     except
       AssetImportError := True;
       Log('HD asset import failed: ' + GetExceptionMessage);

@@ -221,6 +221,49 @@ bool ShiftMinimap(void* map, HudPoint delta) {
     return true;
 }
 
+constexpr std::uint32_t raceTableWidgets[] = {
+    0xb1c5ed0d, 0x5ed609a1, // Race information and leaderboard.
+    // These siblings make up the upper-right pursuit board. The timer and
+    // bounty are in a different branch from the milestone rows and icons.
+    0xde89e070, 0x2269d232, 0x9afce2b8
+};
+
+void LayoutUpperRaceHud(const char* package) {
+    static std::array<std::array<HudGroupPosition, std::size(raceTableWidgets)>, 2> tables;
+    static HudGroupPosition mirror, radar, radarBacking;
+    const HudPoint offset{0, FitTopEdge(activeLayout.hudY)};
+    for (unsigned i = 0; i < tables.size(); ++i) {
+        const auto hash = i == 0 ? 0x5d0101f1u : 0x2fe4ff9cu;
+        auto* right = FindHudObject(package, hash);
+        auto* content = FindHudChild(right, 0x5c7a5c8a);
+        // The table's layout is authored under the right HUD's 640x480
+        // parent. Account for movement already applied to that parent.
+        constexpr float authoredRight = 209.65f;
+        const auto origin = AddHudPoints(ReadHudPosition(right), ReadHudPosition(content));
+        const HudPoint tableOffset{authoredRight + 320.0f / activeLayout.hudX - 320.0f - origin.x, offset.y};
+        // Translate the whole table, even when the next animation will show it.
+        for (unsigned j = 0; j < std::size(raceTableWidgets); ++j)
+            SetHudGroupOffset(tables[i][j], FindHudChild(content, raceTableWidgets[j]), tableOffset);
+    }
+    // Both halves of the native mirror bezel share this group. Its offset must
+    // agree with the glass quad submitted by DrawResponsiveMirror.
+    SetHudGroupOffset(mirror, FindHudObject(package, 0x7fac287b), offset);
+    auto* radarRoot = FindHudObject(package, 0xab9c1d4d);
+    // The shared root also contains the countdown and other race messages.
+    SetHudGroupOffset(radar, FindHudChild(radarRoot, 0x062743f5), offset);
+    SetHudGroupOffset(radarBacking, FindHudChild(radarRoot, 0x839e7d77), offset);
+}
+
+char raceHudPackage[64]{};
+
+void __fastcall RenderResponsiveRaceTables(void* frontendLayer, void*) {
+    // FEng can replace the authored positions after the HUD update hook.
+    // Place the actual groups together immediately before FEng submits them.
+    if (GameValue<std::uint32_t>(gameFlowStateRva) != 6) raceHudPackage[0] = 0;
+    else if (raceHudPackage[0] && !unlimited_split_screen::RaceActive()) LayoutUpperRaceHud(raceHudPackage);
+    GameFunction<void (__thiscall*)(void*)>(0x1be800)(frontendLayer);
+}
+
 void (*captureHudInstruments)(std::uint8_t*) = nullptr;
 
 void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
@@ -230,13 +273,16 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
     if (unlimited_split_screen::RaceActive()) return;
     const auto* package = HudField<const char*>(hud, 0x24);
     if (!package || GameValue<std::uint32_t>(gameFlowStateRva) != 6) return;
+    if (_stricmp(raceHudPackage, package) != 0)
+        std::snprintf(raceHudPackage, sizeof(raceHudPackage), "%s", package);
     if (captureHudInstruments) captureHudInstruments(hud);
 
     static std::uint8_t* previousHud = nullptr;
     static void* previousMap = nullptr;
     static float previousScaleX = 0, previousScaleY = 0;
     static float mapOffset = 0;
-    static std::array<HudGroupPosition, 5> anchors{};
+    static std::array<HudGroupPosition, 4> anchors{};
+    static std::array<HudGroupPosition, 3> independent{};
     constexpr std::uint32_t mapWidgets[] = {
         0x382d2fc9, 0xc46a80a9, 0xb0f63386, // Ring, pursuit heat and its counter.
         0x87c38e97, 0xedfb6d37 // Left tachometer and needle in drag events.
@@ -245,13 +291,8 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
         0x5164d4ea, 0x941fff09, 0x87c38e97, 0xc5d551b7, 0x8991bd54, // Gauge groups.
         0xedfb6d37, 0x5df2f5b4 // Needles drawn as separate siblings.
     };
-    constexpr std::uint32_t raceWidgets[] = {
-        0xb1c5ed0d, 0x5ed609a1, // Race information and leaderboard.
-        0x2269d232, 0x9afce2b8  // Pursuit information and its status image.
-    };
     static HudCorner<std::size(mapWidgets)> mapCorner;
     static std::array<HudCorner<std::size(speedWidgets)>, 2> speedCorners;
-    static std::array<HudCorner<std::size(raceWidgets)>, 2> raceCorners;
     static HudCorner<1> dragCorner;
     static unsigned updates = 0;
     static unsigned settlingFrames = 0;
@@ -264,9 +305,9 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
     else if (++updates % 8 != 0) return;
     if (newHud) {
         anchors = {};
+        independent = {};
         mapCorner = {};
         speedCorners = {};
-        raceCorners = {};
         dragCorner = {};
         mapOffset = 0;
     }
@@ -286,7 +327,6 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
     for (std::size_t i = 0; i < rightRoots.size(); ++i) {
         rightContent[i] = FindHudChild(rightRoots[i], 0x5c7a5c8a);
         speedCorners[i].FindChildren(rightContent[i], speedWidgets);
-        raceCorners[i].FindChildren(rightContent[i], raceWidgets);
     }
     constexpr std::uint32_t dragWidgets[] = {0x87c38e97};
     dragCorner.FindChildren(right, dragWidgets);
@@ -304,10 +344,24 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
         void* content = rightContent[i];
         const auto origin = AddHudPoints(ReadHudPosition(rightRoots[i]), ReadHudPosition(content));
         speedCorners[i].Align(origin, true);
-        raceCorners[i].Align(origin, true, false);
     }
     dragCorner.Align(ReadHudPosition(right), true);
-    AnchorHudGroup(anchors.back(), FindHudObject(package, 0x7fac287b), {}, {0, -y}, false, true);
+    LayoutUpperRaceHud(package);
+
+    // These separate package roots contain the Speedbreaker display and
+    // other transient race elements. Keep their horizontal animation and
+    // slide the whole group along the vertical edge on taller viewports.
+    constexpr std::uint32_t independentRoots[] = {0x82d60021, 0x0f365871, 0x00a1a862};
+    for (std::size_t i = 0; i < std::size(independentRoots); ++i) {
+        auto* object = FindHudObject(package, independentRoots[i]);
+        HudBounds bounds{};
+        unsigned remaining = 512;
+        MeasureHudBounds(object, {}, 0, remaining, bounds);
+        if (!bounds.Valid()) continue;
+        const float center = (bounds.top + bounds.bottom) * 0.5f - independent[i].applied.y;
+        const float travel = center < -80 ? -y : center > 80 ? y : 0;
+        AnchorHudGroup(independent[i], object, {}, {0, travel}, true, true);
+    }
 
     // Native widescreen resets the global X pivot before its script moves the
     // backdrop. Preserve the prior patch offset while the script catches up.
@@ -323,7 +377,9 @@ void __fastcall LayoutRaceHud(std::uint8_t* hud, void*) {
 }
 
 bool InstallResponsiveRaceHud() {
-    return RedirectCall(0x18cad2, 0x1696c0, reinterpret_cast<std::uintptr_t>(&LayoutRaceHud));
+    if (!RedirectCall(0x18cad2, 0x1696c0, reinterpret_cast<std::uintptr_t>(&LayoutRaceHud))) return false;
+    RedirectCall(0x116f80, 0x1be800, reinterpret_cast<std::uintptr_t>(&RenderResponsiveRaceTables));
+    return true;
 }
 
 void LayoutSongNotice() {
@@ -377,13 +433,13 @@ using ShowChyron = void (__cdecl*)(const char*, const char*, const char*);
 std::uint64_t discNoticeShown = 0, discNoticeRequested = 0;
 
 void SetDiscNoticeBranding(bool custom, std::shared_ptr<const unlimited_discx::Cover> cover = {}) {
-    const bool hasCover = cover != nullptr;
+    const bool hasCover = custom && cover != nullptr;
     unlimited_split_screen::SetDiscCover(std::move(cover));
     const struct { std::uint32_t object, replacement; bool replace; } art[] = {
+        {songOriginalTab, unlimited_split_screen::discxNoticeTabHash, custom},
         {songOriginalBadge, unlimited_split_screen::discxNoticeEmptyHash, hasCover},
         {0xc56abf24, unlimited_split_screen::discxNoticeEmptyHash, hasCover}, // Inner stripes.
         {unlimited_split_screen::discxCoverBase, unlimited_split_screen::discxNoticeCoverHash, hasCover},
-        {songOriginalTab, unlimited_split_screen::discxNoticeTabHash, custom},
     };
     for (const auto& item : art) {
         auto* image = FindHudObject(songNoticePackage, item.object);
@@ -399,32 +455,47 @@ void SetDiscNoticeBranding(bool custom, std::shared_ptr<const unlimited_discx::C
 
 void __cdecl ShowStockSongNotice(const char* title, const char* artist, const char* album) {
     if (unlimited_discx::Selected()) return;
-    if (discNoticeShown || discNoticeRequested) {
-        SetDiscNoticeBranding(false);
-        discNoticeShown = discNoticeRequested = 0;
-    }
+    SetDiscNoticeBranding(false);
+    discNoticeShown = discNoticeRequested = 0;
     GameFunction<ShowChyron>(showChyronRva)(title, artist, album);
 }
 
-void SetDiscNoticeText(void* widget, std::wstring text) {
-    if (!widget || HudField<unsigned>(widget, 0x18) != 2) return;
+using NoticeStrings = std::array<std::wstring, 3>;
+constexpr std::uintptr_t nativeNoticeWidth = 0x186210;
+const NoticeStrings* measuringDiscTags = nullptr;
+bool nativeDiscWidths = false;
+
+template<unsigned index>
+float __fastcall MeasureDiscNotice(void* font, void*, const wchar_t* stock, unsigned flags) {
+    const auto* text = measuringDiscTags ? (*measuringDiscTags)[index].c_str() : stock;
+    return GameFunction<float (__thiscall*)(void*, const wchar_t*, unsigned)>(nativeNoticeWidth)(font, text, flags);
+}
+
+std::wstring FitDiscNoticeText(void* widget, std::wstring text) {
     for (auto& ch : text) if (ch < L' ') ch = L' ';
     if (text.size() > 64) text.resize(64);
+    const auto trimBrokenPair = [&] {
+        if (!text.empty() && text.back() >= 0xd800 && text.back() <= 0xdbff) text.pop_back();
+    };
+    trimBrokenPair();
     auto* font = GameFunction<void* (__cdecl*)(std::uint32_t)>(0x185b50)(HudField<std::uint32_t>(widget, 0x24));
     if (font) {
-        auto width = GameFunction<float (__thiscall*)(void*, const wchar_t*, unsigned)>(0x186210);
+        const auto width = GameFunction<float (__thiscall*)(void*, const wchar_t*, unsigned)>(nativeNoticeWidth);
         const auto flags = HudField<unsigned>(widget, 0x1c);
         if (width(font, text.c_str(), flags) > 275.0f) {
             do {
                 text.pop_back();
-                if (!text.empty() && text.back() >= 0xd800 && text.back() <= 0xdbff) text.pop_back();
+                trimBrokenPair();
             } while (!text.empty() && width(font, (text + L"…").c_str(), flags) > 275.0f);
             text += L"…";
         }
     }
-    if (!text.empty() && text.back() >= 0xd800 && text.back() <= 0xdbff) text.pop_back();
+    return text;
+}
+
+void SetDiscNoticeText(void* widget, const wchar_t* text) {
     GameFunction<void (__thiscall*)(void*, const wchar_t*)>(0x1bcd20)(
-        static_cast<std::uint8_t*>(widget) + 0x64, text.c_str());
+        static_cast<std::uint8_t*>(widget) + 0x64, text);
     HudField<unsigned>(widget, 0x1c) |= 0x400000u;
 }
 
@@ -442,46 +513,73 @@ void ServiceDiscSongNotice(void* frontend) {
     }
     if (!frontend || !unlimited_discx::PlayingInGameMix() ||
         sequence == discNoticeShown || GameValue<int>(0x4ee348) > 0) return;
-    if (discNoticeRequested != sequence) {
-        GameFunction<ShowChyron>(showChyronRva)(nullptr, nullptr, nullptr);
-        discNoticeRequested = sequence;
+    if (discNoticeRequested == sequence) return;
+    discNoticeRequested = sequence;
+    GameFunction<ShowChyron>(showChyronRva)(nullptr, nullptr, nullptr);
+}
+
+void __fastcall StartNativeSongNotice(void* card, void*) {
+    const auto start = GameFunction<void (__thiscall*)(void*)>(0x18d670);
+    if (!unlimited_discx::Selected()) {
+        SetDiscNoticeBranding(false);
+        start(card);
+        return;
     }
-    auto* card = GameFunction<void* (__cdecl*)(const char*)>(0x191e90)(songNoticePackage);
+    // This callback is dispatched by the native chyron at the end of its
+    // gameplay delay, or immediately in the frontend. It also owns expiration.
+    const auto sequence = discNoticeRequested;
+    if (!sequence || sequence != unlimited_discx::TrackSequence()) return;
+    if (!unlimited_discx::PlayingInGameMix()) {
+        discNoticeRequested = 0;
+        return;
+    }
     auto* title = FindHudObject(songNoticePackage, 0xf5387816);
     auto* artist = FindHudObject(songNoticePackage, 0x11db9e17);
     auto* album = FindHudObject(songNoticePackage, 0x48097852);
-    if (!card || !title || !artist || !album) return;
+    const std::array widgets{title, artist, album};
+    for (auto* widget : widgets)
+        if (!widget || HudField<unsigned>(widget, 0x18) != 2) return;
     const auto track = unlimited_discx::NowPlaying();
     if (track.sequence != sequence) return;
 
-    // The original Start treats its narrow strings as printf formats. Only
-    // give it placeholders for the width class, then write the UTF-16 tags.
+    const NoticeStrings tags{FitDiscNoticeText(title, track.title), FitDiscNoticeText(artist, track.artist),
+                             FitDiscNoticeText(album, track.album)};
+    // Start takes format strings. Keep the metadata in UTF-16 and give the
+    // game's three native measurements the same text that FEng will draw.
     constexpr std::uintptr_t tagBase = 0x4f3c48;
     std::array<const char*, 3> original{};
-    const auto placeholder = [](const std::wstring& text) {
-        return std::string(std::min<std::size_t>(40, text.size()), 'M');
-    };
-    const std::array widths{placeholder(track.title), placeholder(track.artist), placeholder(track.album)};
-    for (std::size_t i = 0; i < widths.size(); ++i) {
+    std::array<std::string, 3> placeholders{};
+    for (std::size_t i = 0; i < tags.size(); ++i) {
+        if (!nativeDiscWidths) placeholders[i].assign(std::min<std::size_t>(40, tags[i].size()), 'M');
         auto& native = GameValue<const char*>(tagBase + i * sizeof(const char*));
         original[i] = native;
-        native = widths[i].c_str();
+        native = placeholders[i].c_str();
     }
-    GameFunction<void (__thiscall*)(void*)>(0x18d670)(card);
-    for (std::size_t i = 0; i < original.size(); ++i)
+    measuringDiscTags = nativeDiscWidths ? &tags : nullptr;
+    start(card);
+    measuringDiscTags = nullptr;
+    for (std::size_t i = 0; i < tags.size(); ++i) {
         GameValue<const char*>(tagBase + i * sizeof(const char*)) = original[i];
-
-    SetDiscNoticeText(title, track.title);
-    SetDiscNoticeText(artist, track.artist);
-    SetDiscNoticeText(album, track.album);
+        SetDiscNoticeText(widgets[i], tags[i].c_str());
+    }
     SetDiscNoticeBranding(true, track.cover);
     discNoticeShown = sequence;
 }
 
 void InstallDiscxSongRouting() {
+    if (!RedirectCall(0x195eb9, 0x18d670, reinterpret_cast<std::uintptr_t>(&StartNativeSongNotice))) return;
     constexpr std::uintptr_t sites[] = {0xf5001, 0x1644bc, 0x1644e4};
     const auto replacement = reinterpret_cast<std::uintptr_t>(&ShowStockSongNotice);
     for (auto site : sites) RedirectCall(site, showChyronRva, replacement);
+
+    constexpr std::uintptr_t widthSites[]{0x18d6ef, 0x18d725, 0x18d767};
+    const std::uintptr_t widths[]{reinterpret_cast<std::uintptr_t>(&MeasureDiscNotice<0>),
+                                  reinterpret_cast<std::uintptr_t>(&MeasureDiscNotice<1>),
+                                  reinterpret_cast<std::uintptr_t>(&MeasureDiscNotice<2>)};
+    nativeDiscWidths = true;
+    for (unsigned i = 0; i < std::size(widthSites); ++i)
+        nativeDiscWidths = RedirectCall(widthSites[i], nativeNoticeWidth, widths[i]) && nativeDiscWidths;
+    // Partial installation is safe because inactive hooks always pass through.
 }
 
 void __fastcall UpdateFrontendSongNotice(void* frontend, void*, int ticks, unsigned lock) {

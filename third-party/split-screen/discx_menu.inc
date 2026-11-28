@@ -344,6 +344,8 @@ static void UpdateDiscWindowAudio() {
     unlimited_discx::SetOutputActive(g_discxWindowActive && !g_discxMinimized && !g_discxClosing);
 }
 
+extern "C" bool UnlimitedScrollVideoOptions(int delta);
+
 static LRESULT CALLBACK DiscWindowEvents(HWND window, UINT message, WPARAM wparam, LPARAM lparam,
                                          UINT_PTR id, DWORD_PTR) {
     switch (message) {
@@ -387,9 +389,10 @@ static LRESULT CALLBACK DiscWindowEvents(HWND window, UINT message, WPARAM wpara
         break;
     case WM_MOUSEWHEEL:
         if (g_discxOpen) {
-            g_discxWheel += static_cast<short>(HIWORD(wparam));
+            g_discxWheel += GET_WHEEL_DELTA_WPARAM(wparam);
             return 0;
         }
+        if (UnlimitedScrollVideoOptions(GET_WHEEL_DELTA_WPARAM(wparam))) return 0;
         break;
     case WM_LBUTTONDOWN:
         if (g_discxOpen) g_discxMouseDown = true;
@@ -748,7 +751,7 @@ static void DrawDiscScreen(const DiscLayout& layout, const unlimited_discx::Play
         DiscTextSurface surface(width, width * 3 / 5);
         if (surface.bits) {
             constexpr DWORD light = 0xfff1ede4, dim = 0xffc7b89f, accent = 0xffffc358;
-            surface.Label(36, 26, 1000, 69, L"EAX Discx", accent, surface.title);
+            surface.Label(36, 26, 1000, 69, L"DISCX", accent, surface.title);
             surface.Label(1330, 38, 134, 46, words.back, light, surface.bold, DT_CENTER);
             std::wstring section = L"UnlimitedMusic";
             if (g_discxInGroup) section += std::wstring(L" / ") + DiscKnown(g_discxGroup.c_str());

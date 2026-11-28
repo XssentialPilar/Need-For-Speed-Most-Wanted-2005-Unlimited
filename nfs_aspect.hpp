@@ -19,6 +19,12 @@ constexpr AspectLayout MakeAspectLayout(unsigned width, unsigned height) {
             horizontalScale, horizontalScale * aspect};
 }
 
+// Translate the top of the fitted canvas to the top of the actual viewport
+// in logical 640 by 480 coordinates. All top-centered HUD draws share it.
+constexpr float FitTopEdge(float scaleY) {
+    return 240.0f - 240.0f / scaleY;
+}
+
 constexpr float UiToClip(float coordinate, float size, float scale) {
     return (2.0f * coordinate / size - 1.0f) * scale;
 }
@@ -77,18 +83,22 @@ void __cdecl SetUpAspectVideoModes() {
     };
     startInNativeMode = read(L"StartAtNative", 1) != 0;
     const unsigned width = read(L"Width", 0), height = read(L"Height", 0);
-    const bool found = ReadNativeMode(factory, adapter, width, height, nativeMode) ||
-                       ((width || height) && ReadNativeMode(factory, adapter, 0, 0, nativeMode));
+    const D3DDISPLAYMODE previous = nativeMode;
+    D3DDISPLAYMODE next{};
+    const bool found = ReadNativeMode(factory, adapter, width, height, next) ||
+                       ((width || height) && ReadNativeMode(factory, adapter, 0, 0, next));
     if (found) {
         struct ModeValue {
             std::uintptr_t offset;
             UINT value;
             UINT original;
         };
+        const UINT oldWidth = previous.Width ? previous.Width : 1600u;
+        const UINT oldHeight = previous.Height ? previous.Height : 1200u;
         const ModeValue changes[] = {
-            {0x4f9428, nativeMode.Width, 1600}, {0x4f9440, nativeMode.Height, 1200},
-            {0x2c2862, nativeMode.Width, 1600}, {0x2c2868, nativeMode.Height, 1200},
-            {0x2c2942, nativeMode.Width, 1600}, {0x2c2948, nativeMode.Height, 1200},
+            {0x4f9428, next.Width, oldWidth}, {0x4f9440, next.Height, oldHeight},
+            {0x2c2862, next.Width, oldWidth}, {0x2c2868, next.Height, oldHeight},
+            {0x2c2942, next.Width, oldWidth}, {0x2c2948, next.Height, oldHeight},
         };
         std::size_t applied = 0;
         for (const auto& change : changes) {
@@ -101,7 +111,8 @@ void __cdecl SetUpAspectVideoModes() {
                 const auto& change = changes[--applied];
                 WriteGameBytes(change.offset, &change.original, sizeof(UINT));
             }
-            nativeMode = {};
+        } else {
+            nativeMode = next;
         }
     }
     queryCaps();

@@ -1,5 +1,5 @@
 // Private build identifier. The front end has no reference to this resource.
 UNLIMITED_BUILD RCDATA
 BEGIN
-    "1.5\0"
+    "1.1.0-beta.1\0"
 END

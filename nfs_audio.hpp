@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <array>
 #include <audioclient.h>
+#include <audiopolicy.h>
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <dsound.h>
 #include <mmdeviceapi.h>
 #include <new>
@@ -18,6 +20,13 @@ enum class Output { Automatic, Surround51, Surround71, Stereo };
 constexpr unsigned outputCount = 4;
 Output preference = Output::Automatic;
 Output startupPreference = Output::Automatic;
+bool matrixEnabled = false;
+bool startupMatrixEnabled = false;
+bool matrixOutput = false;
+bool audioRouteInitialized = false;
+wchar_t audioPreferences[MAX_PATH]{};
+constexpr int stereoMode = 1, quadMode = 2, surroundMode = 3;
+constexpr wchar_t matrixSetting[] = L"UnlimitedMatrix";
 unsigned endpointChannels = 0;
 unsigned desiredChannels = 0;
 constexpr DWORD surroundMask = 0x63f;
@@ -25,9 +34,88 @@ constexpr GUID pcmSubtype = {1, 0, 0x0010, {0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x7
 constexpr GUID bufferIid = {0x279afa85, 0x4981, 0x11ce, {0xa5, 0x21, 0, 0x20, 0xaf, 0x0b, 0xe5, 0x60}};
 constexpr GUID unknownIid = {0, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
 
+template<std::size_t N>
+bool HasConsoleMusicFile(const wchar_t (&relative)[N], DWORD size) {
+    const auto* separator = std::wcsrchr(settingsPath, L'\\');
+    if (!separator || separator - settingsPath + N >= MAX_PATH) return false;
+    wchar_t path[MAX_PATH]{};
+    std::wmemcpy(path, settingsPath, separator - settingsPath + 1);
+    std::wcscat(path, relative);
+    WIN32_FILE_ATTRIBUTE_DATA info{};
+    return GetFileAttributesExW(path, GetFileExInfoStandard, &info) &&
+           !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+           !info.nFileSizeHigh && info.nFileSizeLow == size;
+}
+
+bool SelectConsoleMusicBank() {
+    if (!settingsPath[0] || !GetPrivateProfileIntW(L"Audio", L"X360Music", 1, settingsPath) ||
+        !HasConsoleMusicFile(L"SOUND\\PFDATA\\X3_Music.mpf", 136148) ||
+        !HasConsoleMusicFile(L"SOUND\\PFDATA\\X3_Music.mus", 653261696)) return false;
+    // Pathfinder requests the two names from this PC 1.3 string table.
+    // Change them together so the PC index is never paired with console audio.
+    constexpr unsigned filenames = 0x498894;
+    constexpr char original[] = "MW_Music.mus\0\0\0\0MW_Music.mpf";
+    constexpr char console[] = "X3_Music.mus\0\0\0\0X3_Music.mpf";
+    static_assert(sizeof(original) == sizeof(console));
+    return MatchGameBytes(filenames, original, sizeof(original)) &&
+           WriteGameBytes(filenames, console, sizeof(console));
+}
+
 constexpr unsigned SelectChannels(Output output, unsigned available) {
     if (output == Output::Stereo) return 2;
-    return available >= 8 && output != Output::Surround51 ? 8 : available >= 6 ? 6 : 0;
+    if (available >= 8 && output != Output::Surround51) return 8;
+    if (available >= 6) return 6;
+    if (available >= 4 && output == Output::Automatic) return 4;
+    return available ? 2 : 0;
+}
+
+bool HasGameAudioSession(IMMDevice* endpoint) {
+    IAudioSessionManager2* manager = nullptr;
+    if (FAILED(endpoint->Activate(__uuidof(IAudioSessionManager2), CLSCTX_INPROC_SERVER,
+                                  nullptr, reinterpret_cast<void**>(&manager)))) return false;
+    IAudioSessionEnumerator* sessions = nullptr;
+    bool matches = false;
+    if (SUCCEEDED(manager->GetSessionEnumerator(&sessions))) {
+        int count = 0;
+        sessions->GetCount(&count);
+        for (int i = 0; i < count && !matches; ++i) {
+            IAudioSessionControl* control = nullptr;
+            if (FAILED(sessions->GetSession(i, &control))) continue;
+            IAudioSessionControl2* process = nullptr;
+            AudioSessionState state{};
+            DWORD pid = 0;
+            if (SUCCEEDED(control->QueryInterface(IID_PPV_ARGS(&process)))) {
+                matches = SUCCEEDED(process->GetProcessId(&pid)) && pid == GetCurrentProcessId() &&
+                          SUCCEEDED(process->GetState(&state)) && state != AudioSessionStateExpired;
+                process->Release();
+            }
+            control->Release();
+        }
+        sessions->Release();
+    }
+    manager->Release();
+    return matches;
+}
+
+IMMDevice* FindPlaybackEndpoint(IMMDeviceEnumerator* enumerator) {
+    IMMDeviceCollection* devices = nullptr;
+    if (SUCCEEDED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices))) {
+        UINT count = 0;
+        devices->GetCount(&count);
+        for (UINT i = 0; i < count; ++i) {
+            IMMDevice* endpoint = nullptr;
+            if (FAILED(devices->Item(i, &endpoint))) continue;
+            if (HasGameAudioSession(endpoint)) {
+                devices->Release();
+                return endpoint;
+            }
+            endpoint->Release();
+        }
+        devices->Release();
+    }
+    IMMDevice* endpoint = nullptr;
+    enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint);
+    return endpoint;
 }
 
 unsigned DetectEndpointChannels() {
@@ -51,11 +139,28 @@ unsigned DetectEndpointChannels() {
             IAudioClient* audioClient = nullptr;
             WAVEFORMATEX* format = nullptr;
             if (SUCCEEDED(create(enumeratorClass, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&enumerator))) &&
-                SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &endpoint)) &&
+                (endpoint = FindPlaybackEndpoint(enumerator)) &&
                 SUCCEEDED(endpoint->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER,
                                              nullptr, reinterpret_cast<void**>(&audioClient))) &&
                 SUCCEEDED(audioClient->GetMixFormat(&format)) && format) {
                 channels = format->nChannels;
+                if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+                    format->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+                    const auto mask = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(format)->dwChannelMask;
+                    constexpr DWORD frontSurround = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT |
+                        SPEAKER_FRONT_CENTER | SPEAKER_LOW_FREQUENCY;
+                    constexpr DWORD back = SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT;
+                    constexpr DWORD side = SPEAKER_SIDE_LEFT | SPEAKER_SIDE_RIGHT;
+                    const bool surround = (mask & back) == back || (mask & side) == side;
+                    if (mask && channels >= 6 && ((mask & frontSurround) != frontSurround || !surround))
+                        channels = 2;
+                    else if (mask && channels >= 8 && (mask & (back | side)) != (back | side))
+                        channels = 6;
+                    else if (mask && channels == 4 &&
+                             (mask & (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | back)) !=
+                             (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | back))
+                        channels = 2;
+                }
             }
             if (format) free(format);
             if (audioClient) audioClient->Release();
@@ -72,25 +177,49 @@ class PlaybackTone {
 public:
     explicit PlaybackTone(unsigned rate)
         : lowBand_(1.0f - std::exp(-6.2831853f * 80.0f / rate)),
-          presenceBand_(1.0f - std::exp(-6.2831853f * 2500.0f / rate)) {}
+          presenceBand_(1.0f - std::exp(-6.2831853f * 2500.0f / rate)),
+          surroundHighPass_(1.0f - std::exp(-6.2831853f * 100.0f / rate)),
+          surroundLowPass_(1.0f - std::exp(-6.2831853f * 7000.0f / rate)),
+          phasePole_((1.0f - std::tan(3.1415927f * 700.0f / rate)) /
+                     (1.0f + std::tan(3.1415927f * 700.0f / rate))) {}
 
-    void Reset() { low_.fill(0.0f); presence_.fill(0.0f); }
+    void Reset() {
+        low_.fill(0.0f);
+        presence_.fill(0.0f);
+        surroundLow_ = surroundBand_ = previousSurround_ = previousPhase_ = 0;
+    }
 
     void Convert(const std::int16_t* input, std::int16_t* output, std::size_t frames,
                  unsigned sourceChannels, unsigned outputChannels) {
         for (; frames; --frames, input += sourceChannels, output += outputChannels) {
+            std::array<std::int16_t, 6> stereoMatrix{};
+            const bool matrix = sourceChannels == 6 && outputChannels == 2;
+            auto* samples = matrix ? stereoMatrix.data() : output;
             for (unsigned ch = 0; ch < sourceChannels; ++ch) {
                 const float x = input[ch];
                 if (sourceChannels == 6 && ch == 3) {
-                    output[ch] = input[ch];  // Preserve the native LFE channel.
+                    samples[ch] = input[ch];  // Preserve the native LFE channel.
                     continue;
                 }
                 low_[ch] += lowBand_ * (x - low_[ch]);
                 presence_[ch] += presenceBand_ * (x - presence_[ch]);
                 const float shaped = 0.91f * x - 0.07f * low_[ch] + 0.065f * (x - presence_[ch]);
-                output[ch] = static_cast<std::int16_t>(std::clamp(shaped, -32768.0f, 32767.0f));
+                samples[ch] = static_cast<std::int16_t>(std::clamp(shaped, -32768.0f, 32767.0f));
             }
-            if (sourceChannels == 6 && outputChannels == 8) {
+            if (matrix) {
+                // Lt/Rt uses a shared center and opposite surround polarity.
+                // The analog Pro Logic surround band is mono and band-limited.
+                const float center = stereoMatrix[2] * .70710678f;
+                const float surround = (stereoMatrix[4] + stereoMatrix[5]) * .5f;
+                surroundLow_ += surroundHighPass_ * (surround - surroundLow_);
+                surroundBand_ += surroundLowPass_ * (surround - surroundLow_ - surroundBand_);
+                const float phase = previousSurround_ - phasePole_ * (surroundBand_ - previousPhase_);
+                previousSurround_ = surroundBand_;
+                previousPhase_ = phase;
+                const float rear = phase * .70710678f;
+                output[0] = static_cast<std::int16_t>(std::clamp(.5f * (stereoMatrix[0] + center - rear), -32768.0f, 32767.0f));
+                output[1] = static_cast<std::int16_t>(std::clamp(.5f * (stereoMatrix[1] + center + rear), -32768.0f, 32767.0f));
+            } else if (sourceChannels == 6 && outputChannels == 8) {
                 // Keep lateral energy centered on the game's original side
                 // direction. A smaller rear copy adds coverage without pulling
                 // the surround image behind the listener.
@@ -105,7 +234,8 @@ public:
 
 private:
     std::array<float, 6> low_{}, presence_{};
-    float lowBand_, presenceBand_;
+    float lowBand_, presenceBand_, surroundHighPass_, surroundLowPass_, phasePole_;
+    float surroundLow_ = 0, surroundBand_ = 0, previousSurround_ = 0, previousPhase_ = 0;
 };
 
 WAVEFORMATEXTENSIBLE ExpandedFormat(DWORD sampleRate) {
@@ -271,9 +401,21 @@ private:
 int __cdecl RouteNativeMixer(int nativeMode) {
     using SetOutputMode = int (__cdecl*)(int);
     const auto setMode = GameFunction<SetOutputMode>(0x41b4ac);
-    const int override = desiredChannels == 2 ? 1 : desiredChannels >= 6 ? 3 : nativeMode;
-    if (override != nativeMode && setMode(override) >= 0) return 0;
-    return setMode(nativeMode);
+    // Let the native call initialize DirectSound before checking for a game session.
+    const int stockResult = setMode(nativeMode);
+    if (!audioRouteInitialized) {
+        endpointChannels = startupPreference == Output::Stereo ? 0 : DetectEndpointChannels();
+        desiredChannels = SelectChannels(startupPreference, endpointChannels);
+        audioRouteInitialized = true;
+    }
+    // Unlimited Matrix takes the native 5.1 mix and encodes it as Lt/Rt.
+    matrixOutput = startupPreference == Output::Stereo && startupMatrixEnabled &&
+                   setMode(surroundMode) >= 0;
+    if (matrixOutput) return 0;
+    const int selected = desiredChannels >= 6 ? surroundMode : desiredChannels == 4 ? quadMode :
+                         desiredChannels == 2 ? stereoMode : nativeMode;
+    if (selected != nativeMode && setMode(selected) >= 0) return 0;
+    return stockResult;
 }
 
 HRESULT __cdecl CreatePlaybackBuffer(int channels, int rate) {
@@ -287,24 +429,28 @@ HRESULT __cdecl CreatePlaybackBuffer(int channels, int rate) {
     auto*& original = GameValue<IDirectSoundBuffer*>(0x5c22b0);
     const DWORD ringBytes = GameValue<DWORD>(0x5c22b4);
     const DWORD inputStride = channels * sizeof(std::int16_t);
-    if (!original || (channels != 2 && channels != 6) || rate <= 0 || !ringBytes || ringBytes % inputStride) {
+    if (!original || (channels != 2 && channels != 4 && channels != 6) ||
+        rate <= 0 || !ringBytes || ringBytes % inputStride) {
         unlimited_discx::SetNativeMixer(0);
         return result;
     }
 
     unsigned playbackChannels = channels;
     IDirectSoundBuffer* backing = original;
-    if (desiredChannels == 8 && channels == 6) {
+    const bool encode = matrixOutput && channels == 6;
+    if (channels == 6 && (encode || desiredChannels == 8)) {
         auto format = ExpandedFormat(rate);
+        WAVEFORMATEX stereo{WAVE_FORMAT_PCM, 2, static_cast<DWORD>(rate), static_cast<DWORD>(rate) * 4, 4, 16, 0};
+        auto* outputFormat = encode ? &stereo : &format.Format;
         DSBUFFERDESC desc{};
         desc.dwSize = sizeof(desc);
         desc.dwFlags = DSBCAPS_LOCSOFTWARE | DSBCAPS_GETCURRENTPOSITION2;
-        desc.dwBufferBytes = (ringBytes / inputStride) * format.Format.nBlockAlign;
-        desc.lpwfxFormat = &format.Format;
+        desc.dwBufferBytes = (ringBytes / inputStride) * outputFormat->nBlockAlign;
+        desc.lpwfxFormat = outputFormat;
         IDirectSoundBuffer* expanded = nullptr;
         if (SUCCEEDED(GameValue<IDirectSound*>(0x5c22a8)->CreateSoundBuffer(&desc, &expanded, nullptr)) && expanded) {
             backing = expanded;
-            playbackChannels = 8;
+            playbackChannels = outputFormat->nChannels;
         }
     }
 
@@ -324,43 +470,115 @@ HRESULT __cdecl CreatePlaybackBuffer(int channels, int rate) {
         playbackChannels = channels;
     }
     if (LogFile log; log.file) {
-        std::fprintf(log.file, "Audio: endpoint=%u desired=%u engine_mix=%i playback=%u tone=%u\n",
-                     endpointChannels, desiredChannels, channels, playbackChannels, unsigned(processed));
+        std::fprintf(log.file, "Audio: endpoint=%u desired=%u engine_mix=%i playback=%u tone=%u matrix=%u\n",
+                     endpointChannels, desiredChannels, channels, playbackChannels, unsigned(processed),
+                     unsigned(encode && playbackChannels == 2));
     }
     return result;
 }
 
-void __fastcall DrawOutput(std::uint8_t* option) {
-    const bool spanish = GameValue<int>(0x4f41c0) == 4;
-    using SetText = void (__thiscall*)(std::uint8_t*, const char*);
-    const auto writeText = GameFunction<SetText>(0x1bcc10);
-    const auto draw = [&](std::size_t offset, const char* text) {
-        auto* object = *reinterpret_cast<std::uint8_t**>(option + offset);
-        if (!object) return;
-        writeText(object, text);
-        *reinterpret_cast<std::uint32_t*>(object + 0x1c) |= 0x400000u;
-    };
-    const bool restart = preference != startupPreference;
-    constexpr const char* spanishCurrent[] = {u8"Automático", "5.1", "7.1", u8"Estéreo"};
-    constexpr const char* englishCurrent[] = {"Automatic", "5.1", "7.1", "Stereo"};
-    constexpr const char* spanishPending[] = {"Auto (reiniciar)", "5.1 (reiniciar)", "7.1 (reiniciar)", u8"Estéreo (reiniciar)"};
-    constexpr const char* englishPending[] = {"Auto (restart)", "5.1 (restart)", "7.1 (restart)", "Stereo (restart)"};
-    const auto index = static_cast<unsigned>(preference);
-    draw(0x2c, spanish ? "Salida de audio" : "Audio output");
-    draw(0x30, (restart ? (spanish ? spanishPending : englishPending)
-                        : (spanish ? spanishCurrent : englishCurrent))[index]);
+struct AudioLabels {
+    const char* output;
+    const char* automatic;
+    const char* stereo;
+    const char* restart;
+};
+
+AudioLabels AudioText(int language) {
+    switch (language) {
+    case 1: return {"Sortie audio", "Automatique", u8"Stéréo", u8"redémarrer"};
+    case 2: return {"Audioausgabe", "Automatisch", "Stereo", "Neustart"};
+    case 3: return {"Uscita audio", "Automatica", "Stereo", "riavvio"};
+    case 4: return {"Salida de audio", u8"Automático", u8"Estéreo", "reiniciar"};
+    case 5: return {"Audio-uitvoer", "Automatisch", "Stereo", "herstart"};
+    case 6: return {u8"Ljudutgång", "Automatisk", "Stereo", "omstart"};
+    case 7: return {"Lydudgang", "Automatisk", "Stereo", "genstart"};
+    case 8: return {u8"오디오 출력", u8"자동", u8"스테레오", u8"재시작"};
+    case 9: return {u8"音訊輸出", u8"自動", u8"立體聲", u8"重新啟動"};
+    case 10: return {u8"音声出力", u8"自動", u8"ステレオ", u8"再起動"};
+    case 11: return {u8"เอาต์พุตเสียง", u8"อัตโนมัติ", u8"สเตอริโอ", u8"เริ่มใหม่"};
+    case 12: return {u8"Wyjście audio", "Automatyczne", "Stereo", "restart"};
+    case 13: return {u8"Äänilähtö", "Automaattinen", "Stereo", u8"käynnistä uudelleen"};
+    default: return {"Audio output", "Automatic", "Stereo", "restart"};
+    }
 }
 
-void __fastcall ChangeOutput(std::uint8_t* option, void*, const char*, std::uint32_t message) {
-    constexpr std::uint32_t left = 0x9120409e, right = 0xb5971bf1;
+void DrawAudioSetting(std::uint8_t* option, const char* label, const char* value, bool pending) {
+    char text[96]{};
+    if (pending) {
+        const auto locale = AudioText(GameValue<int>(0x4f41c0));
+        std::snprintf(text, sizeof(text), "%s (%s)", value, locale.restart);
+        value = text;
+    }
+    SetOptionText(option, label, value);
+}
+
+void __fastcall DrawOutput(std::uint8_t* option) {
+    const auto locale = AudioText(GameValue<int>(0x4f41c0));
+    const char* values[]{locale.automatic, "5.1", "7.1", locale.stereo};
+    DrawAudioSetting(option, locale.output, values[static_cast<unsigned>(preference)], preference != startupPreference);
+}
+
+void __fastcall SetupAudio(std::uint8_t* screen, void*);
+
+void RefreshStereoOptions(const char* package, std::uint8_t* option) {
+    if (!package) return;
+    using FindScreen = std::uint8_t* (__cdecl*)(const char*);
+    auto* screen = GameFunction<FindScreen>(0x191e90)(package);
+    if (!screen || HudField<std::uint8_t*>(screen, 0x34) != option) return;
+    const int selected = HudField<int>(screen, 0x108);
+    auto*& backup = HudField<void*>(screen, 0x130);
+    auto* before = backup;
+    GameFunction<void (__thiscall*)(void*)>(0x188c90)(screen);
+    SetupAudio(screen, nullptr);
+    if (before && backup != before) {
+        if (backup) GameFunction<void (__cdecl*)(void*)>(0x252b10)(backup);
+        backup = before;
+    }
+    GameFunction<void (__thiscall*)(void*, int)>(0x1a5ea0)(screen, selected);
+}
+
+const wchar_t* AudioSettingsFile() {
+    return audioPreferences[0] ? audioPreferences : settingsPath;
+}
+
+unsigned ReadAudioSetting(const wchar_t* key, const wchar_t* legacyKey = nullptr) {
+    const auto read = [key, legacyKey](const wchar_t* file, unsigned fallback) {
+        if (!file[0]) return fallback;
+        // A user's old preference takes precedence over any installed default.
+        if (legacyKey) fallback = GetPrivateProfileIntW(L"Audio", legacyKey, fallback, file);
+        return GetPrivateProfileIntW(L"Audio", key, fallback, file);
+    };
+    return read(audioPreferences, read(settingsPath, 0));
+}
+
+void __fastcall ChangeOutput(std::uint8_t* option, void*, const char* package, std::int32_t message) {
+    constexpr std::int32_t left = -1860157282, right = -1248388111;
     if ((message != left && message != right) || !settingsPath[0]) return;
     const unsigned next = (static_cast<unsigned>(preference) + (message == left ? outputCount - 1 : 1)) % outputCount;
     const wchar_t value[] = {static_cast<wchar_t>(L'0' + next), L'\0'};
-    if (WritePrivateProfileStringW(L"Audio", L"Output", value, settingsPath)) {
+    if (WritePrivateProfileStringW(L"Audio", L"Output", value, AudioSettingsFile())) {
+        const bool wasStereo = preference == Output::Stereo;
         preference = static_cast<Output>(next);
         option[0x2a] = 1;
         DrawOutput(option);
+        if (wasStereo != (preference == Output::Stereo)) RefreshStereoOptions(package, option);
     }
+}
+
+void __fastcall DrawUnlimitedMatrix(std::uint8_t* option) {
+    const int language = GameValue<int>(0x4f41c0);
+    const auto labels = VideoEffectsText(language);
+    DrawAudioSetting(option, "Unlimited Matrix", matrixEnabled ? labels.on : labels.off,
+                     startupPreference != Output::Stereo || matrixEnabled != startupMatrixEnabled);
+}
+
+void __fastcall ChangeUnlimitedMatrix(std::uint8_t* option, void*, const char*, std::int32_t message) {
+    if (!VideoOptionDirection(message) || preference != Output::Stereo || !settingsPath[0]) return;
+    if (!WritePrivateProfileStringW(L"Audio", matrixSetting, matrixEnabled ? L"0" : L"1", AudioSettingsFile())) return;
+    matrixEnabled = !matrixEnabled;
+    option[0x2a] = 1;
+    DrawUnlimitedMatrix(option);
 }
 
 // Use the stock switch's input, widget placement and localized Yes/No labels.
@@ -368,19 +586,19 @@ void __fastcall DrawMusicSource(std::uint8_t* option) {
     const auto draw = GameFunction<void (__thiscall*)(void*)>(0x11b060);
     auto* database = GameValue<std::uint8_t*>(0x51cf90);
     auto* profile = database ? *reinterpret_cast<std::uint8_t**>(database + 0x10) : nullptr;
-    if (!profile || !unlimited_discx::Selected()) {
+    if (profile && unlimited_discx::Selected()) {
+        auto& traxMode = *reinterpret_cast<int*>(profile + 0x78);
+        const int saved = traxMode;
+        traxMode = unlimited_discx::Enabled();
+        draw(option);
+        traxMode = saved;
+    } else {
         draw(option);
         return;
     }
 
-    auto& traxMode = *reinterpret_cast<int*>(profile + 0x78);
-    const int saved = traxMode;
-    traxMode = unlimited_discx::Enabled();
-    draw(option);
-    traxMode = saved;
-
     if (auto* title = *reinterpret_cast<std::uint8_t**>(option + 0x2c)) {
-        GameFunction<void (__thiscall*)(void*, const char*)>(0x1bcc10)(title, "EAX Discx");
+        GameFunction<void (__thiscall*)(void*, const char*)>(0x1bcc10)(title, "DISCX");
         *reinterpret_cast<std::uint32_t*>(title + 0x1c) |= 0x400000u;
     }
 }
@@ -417,6 +635,7 @@ void __fastcall SetupAudio(std::uint8_t* screen, void*) {
         table[3] = reinterpret_cast<void*>(&DrawOutput);
     }
 
+    bool hasOutput = false;
     auto* root = screen + 0x2c;
     auto* link = *reinterpret_cast<std::uint8_t**>(root);
     for (int i = 0; link && link != root && i < 10; ++i) {
@@ -429,26 +648,21 @@ void __fastcall SetupAudio(std::uint8_t* screen, void*) {
         if (vtable == nativeTable) {
             vtable = table.data();
             DrawOutput(option);
-            return;
+            hasOutput = true;
         }
         link = *reinterpret_cast<std::uint8_t**>(link);
     }
 
-    // The stock pause screen omits its speaker row. Register an equivalent
-    // toggle there if the real FEng package has an unused row.
-    using FindRow = void* (__thiscall*)(std::uint8_t*, const char*);
-    const auto find = GameFunction<FindRow>(0x173cc0);
-    const auto* prefixes = reinterpret_cast<const char* const*>(screen + 0xb0);
-    if (*reinterpret_cast<int*>(screen + 0x104) >= 10 || !prefixes[0] || !prefixes[1] ||
-        !find(screen, prefixes[0]) || !find(screen, prefixes[1])) return;
-    using Allocate = void* (__cdecl*)(std::size_t);
-    using Construct = void (__thiscall*)(void*, bool);
-    using Add = void (__thiscall*)(void*, void*, int);
-    auto* option = GameFunction<Allocate>(0x252ad0)(0x5c);
-    if (!option) return;
-    GameFunction<Construct>(0x11a7b0)(option, true);
-    *static_cast<void***>(option) = table.data();
-    GameFunction<Add>(0x188570)(screen, option, 1);
+    // The stock pause screen omits its speaker row. Reuse its authored
+    // toggle bindings for the output row and the Stereo-only sub-option.
+    static std::array<void*, 15> outputTable{}, matrixTable{};
+    if (!hasOutput) {
+        auto* output = AddUnlimitedVideoOption(screen, outputTable,
+            &ChangeOutput, &DrawOutput);
+        hasOutput = output != nullptr;
+    }
+    if (hasOutput && preference == Output::Stereo)
+        AddUnlimitedVideoOption(screen, matrixTable, &ChangeUnlimitedMatrix, &DrawUnlimitedMatrix);
 }
 
 } // namespace unlimited_audio
@@ -478,10 +692,10 @@ bool InstallSurroundAudio() {
     if (!MatchGameBytes(nativeRingFlags, &originalFlags, sizeof(originalFlags)) ||
         !WriteGameBytes(nativeRingFlags, &foregroundFlags, sizeof(foregroundFlags))) return false;
 
-    const unsigned saved = settingsPath[0] ? GetPrivateProfileIntW(L"Audio", L"Output", 0, settingsPath) : 0;
+    unlimited_settings::UserFile(audioPreferences, L"Audio");
+    const unsigned saved = ReadAudioSetting(L"Output");
     preference = startupPreference = saved < outputCount ? static_cast<Output>(saved) : Output::Automatic;
-    endpointChannels = DetectEndpointChannels();
-    desiredChannels = SelectChannels(preference, endpointChannels);
+    startupMatrixEnabled = matrixEnabled = ReadAudioSetting(matrixSetting, L"ProLogic") != 0;
     const auto image = reinterpret_cast<std::uintptr_t>(engine);
     for (std::size_t i = 0; i < std::size(hooks); ++i) {
         const auto& h = hooks[i];
@@ -494,7 +708,7 @@ bool InstallSurroundAudio() {
         return false;
     }
     if (LogFile log; log.file) {
-        std::fprintf(log.file, "Audio: preference=%u endpoint=%u desired=%u\n", saved, endpointChannels, desiredChannels);
+        std::fprintf(log.file, "Audio: preference=%u unlimited_matrix=%u\n", saved, unsigned(startupMatrixEnabled));
     }
     return true;
 }

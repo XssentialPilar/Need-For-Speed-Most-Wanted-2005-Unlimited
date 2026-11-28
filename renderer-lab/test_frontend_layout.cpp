@@ -4,7 +4,7 @@
 namespace {
 using Storage = std::array<std::uint32_t,64>;
 Storage option{}, optionData{}, left{}, leftData{}, right{}, rightData{}, frontend{}, cache{}, pool{}, font{}, white{};
-Storage dal{}, options{};
+Storage dal{}, options{}, firstLabel{}, firstLabelData{};
 const std::uint16_t testString[]{'V','a','l','u','e',0};
 const OptionColor nativeColor{104,120,162,194};
 float textWidth = 400;
@@ -15,6 +15,7 @@ OptionColor ink{};
 OptionPlate bounds{};
 
 void* __cdecl FindArrow(const char*,std::uint32_t hash) {
+    if (hash == firstOptionName) return firstLabel.data();
     ++arrowCalls;
     if (hash == firstLeftArrow || hash == firstLeftArrow+5) return left.data();
     if (hash == firstRightArrow || hash == firstRightArrow+5) return right.data();
@@ -99,6 +100,9 @@ bool RunRows() {
     HudField<unsigned>(option.data(),0x18)=2; HudField<unsigned>(option.data(),0x1c)=0x20;
     HudField<void*>(option.data(),0x2c)=optionData.data();
     HudField<float>(optionData.data(),0x3c)=.9f; HudField<float>(optionData.data(),0x1c)=50;
+    HudField<unsigned>(firstLabel.data(),0x18)=2;
+    HudField<void*>(firstLabel.data(),0x2c)=firstLabelData.data();
+    HudField<float>(firstLabelData.data(),0x1c)=8;
     HudField<unsigned>(left.data(),0x18)=1; HudField<unsigned>(right.data(),0x18)=1;
     HudField<void*>(left.data(),0x2c)=leftData.data(); HudField<void*>(right.data(),0x2c)=rightData.data();
     HudField<float>(leftData.data(),0x1c)=-34; HudField<float>(rightData.data(),0x1c)=133;
@@ -116,6 +120,7 @@ bool RunRows() {
                 drawn._11*textWidth <= 130.01f && !std::memcmp(&ink,&nativeColor,sizeof(ink));
             SendRow(firstOptionName+5,2);
             valid &= measureCalls==1 && !arrowCalls && !plateCalls && drawn._11==drawn._22 &&
+                std::fabs(drawn._41-188)<.01f &&
                 !std::memcmp(&ink,&nativeColor,sizeof(ink));
             const auto farEdge=drawn._41 - drawn._11*textWidth;
             valid &= UiToClip(farEdge,640,activeLayout.hudX) > -.985f;

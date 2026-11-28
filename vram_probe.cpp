@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <new>
 #include "nfs_controller.hpp"
 #include "nfs_discx.hpp"
 #include "nfs_rumble.hpp"
@@ -47,6 +48,7 @@ unlimited_display::WindowHost displayHost;
 unlimited_display::Mode requestedWindowMode = unlimited_display::Mode::Exclusive;
 bool displayResetInstalled = false;
 bool windowModePending = false;
+bool frameStatistics = false;
 std::atomic<unsigned> lastFrameApi{0};
 IDirect3D9* trackedFactory;
 IDirect3DDevice9* trackedDevice;
@@ -55,10 +57,33 @@ HMODULE engine;
 LARGE_INTEGER frequency{};
 wchar_t logPath[MAX_PATH]{};
 wchar_t settingsPath[MAX_PATH]{};
-constexpr unsigned frameLimits[] = {30, 40, 60, 70, 90, 144, 0};
+constexpr unsigned automaticFrameLimit = UINT_MAX;
+constexpr unsigned frameLimits[] = {30, 40, 60, 70, 90, 144, 0, automaticFrameLimit};
 constexpr const char* frameLimitLabels[] = {"30", "40", "60", "70", "90", "144"};
-constexpr std::size_t unlimitedIndex = std::size(frameLimits) - 1;
-std::size_t frameLimitIndex = unlimitedIndex;
+constexpr std::size_t unlimitedIndex = std::size(frameLimits) - 2;
+constexpr std::size_t automaticIndex = std::size(frameLimits) - 1;
+std::size_t frameLimitIndex = automaticIndex;
+unsigned availableThreads = 0;
+
+unsigned AvailableGameThreads() {
+    DWORD_PTR process = 0, system = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process, &system) && process) {
+        unsigned count = 0;
+        for (; process; process &= process - 1) ++count;
+        return count;
+    }
+    SYSTEM_INFO info{};
+    GetSystemInfo(&info);
+    return info.dwNumberOfProcessors;
+}
+
+bool LowThreadBudget() {
+    return availableThreads > 0 && availableThreads <= 2;
+}
+
+unsigned EffectiveFrameLimit() {
+    return frameLimitIndex == automaticIndex ? (LowThreadBudget() ? 60 : 0) : frameLimits[frameLimitIndex];
+}
 unsigned simulationRate = 60;
 bool shadowHookInstalled = false;
 bool aspectHookInstalled = false;
@@ -131,8 +156,7 @@ T& GameValue(std::uintptr_t offset) {
     return *reinterpret_cast<T*>(reinterpret_cast<std::uint8_t*>(engine) + offset);
 }
 
-bool WriteGameBytes(std::uintptr_t offset, const void* data, std::size_t size) {
-    auto* dest = &GameValue<std::uint8_t>(offset);
+bool WriteCodeBytes(void* dest, const void* data, std::size_t size) {
     DWORD old;
     if (!VirtualProtect(dest, size, PAGE_EXECUTE_READWRITE, &old)) return false;
     std::memcpy(dest, data, size);
@@ -140,6 +164,10 @@ bool WriteGameBytes(std::uintptr_t offset, const void* data, std::size_t size) {
     DWORD restored;
     VirtualProtect(dest, size, old, &restored);
     return true;
+}
+
+bool WriteGameBytes(std::uintptr_t offset, const void* data, std::size_t size) {
+    return WriteCodeBytes(&GameValue<std::uint8_t>(offset), data, size);
 }
 
 bool MatchGameBytes(std::uintptr_t offset, const void* bytes, std::size_t size) {
@@ -344,21 +372,27 @@ bool InstallUncappedTiming(unsigned rate) {
     return true;
 }
 
-void LoadFrameLimit() {
+bool LocateSettings() {
+    if (settingsPath[0]) return true;
     const DWORD count = GetModuleFileNameW(engine, settingsPath, MAX_PATH);
     if (!count || count >= MAX_PATH) {
         settingsPath[0] = 0;
-        return;
+        return false;
     }
     auto* name = wcsrchr(settingsPath, L'\\');
     constexpr wchar_t settingsName[] = L"NFSMW-Unlimited.ini";
     if (!name || name + std::size(settingsName) >= settingsPath + MAX_PATH) {
         settingsPath[0] = 0;
-        return;
+        return false;
     }
     wcscpy(name + 1, settingsName);
+    return true;
+}
+
+void LoadFrameLimit() {
+    if (!LocateSettings()) return;
     requestedWindowMode = unlimited_display::DecodeMode(GetPrivateProfileIntW(L"Display",L"WindowMode",0,settingsPath));
-    const unsigned saved = GetPrivateProfileIntW(L"Graphics", L"FrameLimit", 0, settingsPath);
+    const unsigned saved = GetPrivateProfileIntW(L"Graphics", L"FrameLimit", -1, settingsPath);
     const auto movie = GetPrivateProfileIntW(L"Graphics", L"NativePasses", 9, settingsPath);
     const auto selected = std::find(std::begin(movieApis), std::end(movieApis), movie);
     nativePassesAtStartup = nativePassesRequested = selected == std::end(movieApis) ? 9 : *selected;
@@ -385,6 +419,7 @@ bool SelectWindowMode(unlimited_display::Mode mode) {
 #include "nfs_language.hpp"
 #include "nfs_frontend_layout.hpp"
 #include "nfs_visual.hpp"
+#include "nfs_console_assets.hpp"
 #include "nfs_movies.hpp"
 #include "nfs_scene_shadow.hpp"
 
@@ -404,18 +439,21 @@ void SetOptionText(std::uint8_t* option, const char* title, const char* value) {
 
 void __fastcall DrawFrameLimit(std::uint8_t* option) {
     const bool spanish = GameValue<int>(0x4f41c0) == 4;
-    SetOptionText(option, spanish ? u8"Límite de FPS" : "Frame limit",
-                  frameLimitIndex == unlimitedIndex
-                      ? (spanish ? u8"Sin límite" : "Unlimited") : frameLimitLabels[frameLimitIndex]);
+    const char* label = frameLimitIndex == automaticIndex
+        ? (spanish ? u8"Automático" : "Automatic")
+        : frameLimitIndex == unlimitedIndex ? (spanish ? u8"Sin límite" : "Unlimited")
+                                            : frameLimitLabels[frameLimitIndex];
+    SetOptionText(option, spanish ? u8"Límite de FPS" : "Frame limit", label);
 }
 
-void __fastcall ChangeFrameLimit(std::uint8_t* option, void*, int, std::int32_t message) {
+void __fastcall ChangeFrameLimit(std::uint8_t* option, void*, const char*, std::int32_t message) {
     constexpr std::int32_t left = -1860157282, right = -1248388111;
     constexpr std::size_t count = std::size(frameLimits);
     if (message != left && message != right) return;
     frameLimitIndex = (frameLimitIndex + (message == left ? count - 1 : 1)) % count;
     wchar_t value[8]{};
-    std::swprintf(value, std::size(value), L"%u", frameLimits[frameLimitIndex]);
+    if (frameLimitIndex == automaticIndex) std::wcscpy(value, L"-1");
+    else std::swprintf(value, std::size(value), L"%u", frameLimits[frameLimitIndex]);
     const bool saved = settingsPath[0] && WritePrivateProfileStringW(L"Graphics", L"FrameLimit", value, settingsPath);
     if (LogFile log; log.file) {
         std::fprintf(log.file, "Graphics option: frame_limit=%u saved=%u\n", frameLimits[frameLimitIndex], saved);
@@ -423,7 +461,7 @@ void __fastcall ChangeFrameLimit(std::uint8_t* option, void*, int, std::int32_t 
     DrawFrameLimit(option);
 }
 
-using OptionAct = void (__fastcall*)(std::uint8_t*, void*, int, std::int32_t);
+using OptionAct = void (__fastcall*)(std::uint8_t*, void*, const char*, std::int32_t);
 using OptionDraw = void (__fastcall*)(std::uint8_t*);
 std::uint8_t* AddUnlimitedVideoOption(std::uint8_t* screen, std::array<void*, 15>& vtable,
                              OptionAct change, OptionDraw draw) {
@@ -467,7 +505,7 @@ void __fastcall DrawXenonEffects(std::uint8_t* option) {
                   !changed && xenonUnavailable ? (spanish ? "No disponibles" : "Unavailable") : value);
 }
 
-void __fastcall ChangeXenonEffects(std::uint8_t* option, void*, int, std::int32_t message) {
+void __fastcall ChangeXenonEffects(std::uint8_t* option, void*, const char*, std::int32_t message) {
     constexpr std::int32_t left = -1860157282, right = -1248388111;
     if ((message != left && message != right) || !settingsPath[0] ||
         !WritePrivateProfileStringW(L"Graphics", L"XenonEffects", xenonPreference ? L"0" : L"1", settingsPath)) return;
@@ -491,7 +529,7 @@ void __fastcall DrawNativePassOption(std::uint8_t* option) {
     SetOptionText(option, spanish ? "API de salida" : "Presentation API", value);
 }
 
-void __fastcall ChangeNativePassOption(std::uint8_t* option, void*, int, std::int32_t message) {
+void __fastcall ChangeNativePassOption(std::uint8_t* option, void*, const char*, std::int32_t message) {
     constexpr std::int32_t left = -1860157282, right = -1248388111;
     if ((message != left && message != right) || !settingsPath[0]) return;
     const auto current = std::find(std::begin(movieApis), std::end(movieApis), nativePassesRequested);
@@ -513,7 +551,7 @@ WindowModeLabels WindowLabels(int language) {
     case 5: return {"Schermmodus","Volledig scherm","Venster","Randloos"};
     case 6: return {u8"Skärmläge",u8"Helskärm",u8"Fönster","Utan kant"};
     case 7: return {u8"Skærmtilstand",u8"Fuld skærm","Vindue","Uden kant"};
-    case 12: return {u8"Tryb ekranu",u8"Pełny ekran","Okno","Bez ramek"};
+    case 12: return {u8"Tryb ekranu",u8"PeÅ‚ny ekran","Okno","Bez ramek"};
     case 13: return {u8"Näyttötila",u8"Koko näyttö","Ikkuna","Reunaton"};
     default: return {"Display mode","Fullscreen","Windowed","Borderless"};
     }
@@ -527,7 +565,7 @@ void __fastcall DrawWindowMode(std::uint8_t* option) {
     SetOptionText(option,text.title,value);
 }
 
-void __fastcall ChangeWindowMode(std::uint8_t* option, void*, int, std::int32_t message) {
+void __fastcall ChangeWindowMode(std::uint8_t* option, void*, const char*, std::int32_t message) {
     constexpr std::int32_t left=-1860157282, right=-1248388111;
     if(message!=left && message!=right)return;
     using Mode=unlimited_display::Mode;
@@ -540,6 +578,7 @@ void __fastcall ChangeWindowMode(std::uint8_t* option, void*, int, std::int32_t 
     }
 }
 
+#include "nfs_textures.hpp"
 #include "nfs_video_options.hpp"
 
 bool FitVideoCalibration(const char* package) {
@@ -566,7 +605,6 @@ void __fastcall SetupVideoWithFrameLimit(std::uint8_t* screen, void*) {
     blurIntensityOption = nullptr;
     const auto page = screen[0x154];
     const bool advanced = page != 0;
-    const int firstNewRow=HudField<int>(screen,0x104);
     if (page == 2) {
         BuildVideoEffectsPage(screen);
     } else if(advanced) {
@@ -579,18 +617,21 @@ void __fastcall SetupVideoWithFrameLimit(std::uint8_t* screen, void*) {
     const char* package = HudField<const char*>(screen, 0x10);
     if (effectsPageInstalled && advanced)
         LabelVideoPageButton(package, page);
-    const bool guide = !advanced && FitVideoCalibration(package);
+    if (!advanced) FitVideoCalibration(package);
     if (auto* calibration = package ? FindHudObject(package, 0xad6b204f) : nullptr) {
         constexpr std::uintptr_t hide = 0x114c70, show = 0x114cc0;
         GameFunction<void (__cdecl*)(void*)>(advanced ? hide : show)(calibration);
     }
-    if (LogFile log; log.file)
-        std::fprintf(log.file, "Graphics menu: package=%s advanced=%u first_new_row=%d next_row=%d calibration_fitted=%u\n",
-                     package ? package : "", static_cast<unsigned>(page),firstNewRow,HudField<int>(screen, 0x104), guide);
 }
 
 bool InstallFrameLimitMenu() {
-    return RedirectCall(0x145d95, 0x1295f0, reinterpret_cast<std::uintptr_t>(&SetupVideoWithFrameLimit));
+    constexpr std::uintptr_t setup = 0x145d95, initialize = 0x145d9e, nativeSetup = 0x1295f0;
+    const auto replacement = reinterpret_cast<std::uintptr_t>(&SetupVideoWithFrameLimit);
+    if (!RedirectCall(setup, nativeSetup, replacement)) return false;
+    if (RedirectCall(initialize, 0x1a5ea0, reinterpret_cast<std::uintptr_t>(&SelectFirstVideoOption))) return true;
+    const auto base = reinterpret_cast<std::uintptr_t>(engine);
+    RedirectCall(setup, replacement - base, base + nativeSetup);
+    return false;
 }
 
 constexpr std::uintptr_t shadowSetting = 0x501830;
@@ -863,10 +904,11 @@ TextureUpload UploadFullSizeTexture(IDirect3DTexture9* texture, const std::uint8
 
 extern "C" __attribute__((used)) int __cdecl NfsmwUploadTextureMipChain(
         IDirect3DTexture9** destination, const std::uint8_t* info, const std::uint8_t* source) {
+    const auto hash = *reinterpret_cast<const std::uint32_t*>(info + 0x24);
+    if (unlimited_textures::Upload(GameValue<IDirect3DDevice9*>(0x582bdc), destination, hash)) return TRUE;
     const auto result = UploadFullSizeTexture(*destination, info, source);
     constexpr std::uint32_t uiSamples[] = {0xe0463afa, 0x545570c6, 0x1a6d3d2c, 0x03c174cf, 0x20865c0a, 0x839e7d77};
     static volatile LONG reported[std::size(uiSamples)]{};
-    const auto hash = *reinterpret_cast<const std::uint32_t*>(info + 0x24);
     const auto sample = std::find(std::begin(uiSamples), std::end(uiSamples), hash);
     if (sample != std::end(uiSamples) && result != TextureUpload::Failed && *destination && logPath[0] &&
         InterlockedCompareExchange(&reported[sample - uiSamples], 1, 0) == 0) {
@@ -1014,7 +1056,7 @@ std::uint32_t GameFlowState() {
 }
 
 void PaceFrame() {
-    const unsigned frameLimit = frameLimits[frameLimitIndex];
+    const unsigned frameLimit = EffectiveFrameLimit();
     static unsigned previousLimit = 0;
     static LONGLONG next = 0;
     if (previousLimit != frameLimit) {
@@ -1027,7 +1069,8 @@ void PaceFrame() {
         using CreateTimer = HANDLE(WINAPI*)(LPSECURITY_ATTRIBUTES, LPCWSTR, DWORD, DWORD);
         const auto create = reinterpret_cast<CreateTimer>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
                                                                          "CreateWaitableTimerExW"));
-        return create ? create(nullptr, nullptr, highResolution, TIMER_MODIFY_STATE | SYNCHRONIZE) : nullptr;
+        const auto precise = create ? create(nullptr, nullptr, highResolution, TIMER_MODIFY_STATE | SYNCHRONIZE) : nullptr;
+        return precise ? precise : LowThreadBudget() ? CreateWaitableTimerW(nullptr, FALSE, nullptr) : nullptr;
     }();
     const LONGLONG interval = (frequency.QuadPart + frameLimit / 2) / frameLimit;
     LARGE_INTEGER now{};
@@ -1035,7 +1078,7 @@ void PaceFrame() {
     while (now.QuadPart < next) {
         const LONGLONG remaining = next - now.QuadPart;
         const LONGLONG microseconds = remaining * 1000000 / frequency.QuadPart;
-        constexpr LONGLONG waitMarginMicroseconds = 400;
+        const LONGLONG waitMarginMicroseconds = LowThreadBudget() ? 0 : 400;
         if (microseconds > waitMarginMicroseconds + 60 && timer) {
             LARGE_INTEGER due{};
             due.QuadPart = -(microseconds - waitMarginMicroseconds) * 10;
@@ -1046,6 +1089,8 @@ void PaceFrame() {
             }
         } else if (microseconds > 4000) {
             Sleep(1);
+        } else if (LowThreadBudget()) {
+            SwitchToThread();
         } else {
             YieldProcessor();
         }
@@ -1155,6 +1200,7 @@ HRESULT WINAPI ResetGameDisplay(IDirect3DDevice9* device) {
 }
 
 void __cdecl ShutdownGameDisplay() {
+    unlimited_textures::ClearDemand();
     nativeFrames.Reset();
     nativeMoviePass.Reset();
     nativeShadowPass.Reset();
@@ -1202,7 +1248,7 @@ HRESULT WINAPI GamePresent(IDirect3DDevice9* device) {
     UnlimitedRumble::Service();
     PaceFrame();
     LARGE_INTEGER begin{}, end{};
-    QueryPerformanceCounter(&begin);
+    if (frameStatistics) QueryPerformanceCounter(&begin);
     HRESULT result = D3D_OK;
     const bool presented = nativePassesActive && !originalPresentationOnly &&
         nativeFrames.TryPresent(device,nativePassesAtStartup,result,&requestedDisplay);
@@ -1210,8 +1256,6 @@ HRESULT WINAPI GamePresent(IDirect3DDevice9* device) {
     if (!presented) {
         const char* reason = nativeFrames.LastErrorText();
         const HWND gameWindow = requestedDisplay.hDeviceWindow ? requestedDisplay.hDeviceWindow : gameFocusWindow;
-        DWORD foregroundPid = 0;
-        GetWindowThreadProcessId(GetForegroundWindow(),&foregroundPid);
         if (nativePassesActive && !originalPresentationOnly && reason && *reason &&
             device->TestCooperativeLevel() == D3D_OK && !IsIconic(gameWindow)) {
             static char reported[192]{};
@@ -1220,6 +1264,8 @@ HRESULT WINAPI GamePresent(IDirect3DDevice9* device) {
                 if (LogFile log; log.file)
                     std::fprintf(log.file,"Frame presentation: selected=%u fallback=D3D9 reason=%s\n",nativePassesAtStartup,reason);
             }
+            DWORD foregroundPid = 0;
+            GetWindowThreadProcessId(GetForegroundWindow(), &foregroundPid);
             if (!requestedDisplay.Windowed && foregroundPid == GetCurrentProcessId() &&
                 (nativeFrames.NeedsPrivateSceneReset() || nativeFrames.ShouldRestoreOriginalMode())) {
                 // Let the engine release the default-pool targets before Reset.
@@ -1232,7 +1278,8 @@ HRESULT WINAPI GamePresent(IDirect3DDevice9* device) {
         if (LogFile log; log.file)
             std::fprintf(log.file,"Frame presentation: active_api=%u fullscreen=%u mode=%s\n",nativePassesAtStartup,!requestedDisplay.Windowed,nativeFrames.PresentationMode());
     }
-    QueryPerformanceCounter(&end);
+    if (SUCCEEDED(result)) unlimited_textures::ServiceDemand(device);
+    if (frameStatistics) QueryPerformanceCounter(&end);
     if (FAILED(result)) {
         if (nativePassesActive && result == D3DERR_DEVICELOST) {
             nativeMoviePass.Reset();
@@ -1256,6 +1303,7 @@ HRESULT WINAPI GamePresent(IDirect3DDevice9* device) {
     }
     lastShadowSetting = quality;
     lastReflectionQuality = reflection;
+    if (!frameStatistics) return result;
     DWORD foreground = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
     if (foreground != GetCurrentProcessId()) return result;
@@ -1295,7 +1343,7 @@ HRESULT WINAPI GamePresent(IDirect3DDevice9* device) {
         if (LogFile log; log.file) {
             std::fprintf(log.file,
                          "pace=%u state=%u samples=%zu fps=%.1f p05=%.2fms p50=%.2fms p95=%.2fms p99=%.2fms avg_Present=%.2fms",
-                         frameLimits[frameLimitIndex], state, count, 1000.0 * count / sum, frames[(count-1) * 5 / 100],
+                         EffectiveFrameLimit(), state, count, 1000.0 * count / sum, frames[(count-1) * 5 / 100],
                          frames[(count-1) / 2], frames[(count-1) * 95 / 100], frames[(count-1) * 99 / 100], presentSum / count);
             ReportTextureBudget(log.file);
             ReportTrackPool(log.file);
@@ -1420,11 +1468,22 @@ HRESULT WINAPI ProbeDevice(IDirect3D9* d3d, UINT ordinal, D3DDEVTYPE type, HWND 
 #include "nfs_audio.hpp"
 #include "nfs_xenon.hpp"
 
-extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID) {
+#include "nfs_console_renderer.hpp"
+#include "nfs_save_hooks.hpp"
+
+extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         const auto executable = GetModuleHandleW(nullptr);
         if (IsTrackedBuild(executable)) {
             engine = executable;
+            unlimited_saves::Install();
+            if (LocateSettings() && GetPrivateProfileIntW(L"Graphics", L"XenonEffects", 0, settingsPath)) {
+                unlimited_console::InstallAssetRouting();
+                unlimited_console::LoadConsolePlatformLights(instance);
+                unlimited_console::InstallConsoleGarageShadows();
+                unlimited_console::InstallConsoleShadowDirection();
+                unlimited_console::InstallConsoleMaterials(instance);
+            }
             renderPoolsExpanded = InstallReflectionRenderPools();
             languageBootstrapInstalled = unlimited_language::InstallLanguageBootstrap();
             unlimited_split_screen::Install(executable);
@@ -1441,8 +1500,22 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     if (!length || length >= MAX_PATH - 32) return SystemFactory(sdkVersion);
     wcscat(logPath, L"NFSMW-graphics.log");
     wchar_t mode[8]{};
+    availableThreads = AvailableGameThreads();
     LoadFrameLimit();
+    frameStatistics = GetPrivateProfileIntW(L"Diagnostics", L"FrameStatistics", 0, settingsPath) != 0;
     LoadVideoEffectsSettings();
+    // The world renderer chains the active capability query when it installs its own.
+    const bool displayCaps = InstallDisplayCapabilityHook();
+    const char* worldRenderer = unlimited_console::SelectWorldRenderer();
+    if (LogFile log; log.file) std::fprintf(log.file, "World renderer: %s\n", worldRenderer);
+    unlimited_console::SelectPlatformReflections();
+    const bool consoleMusic = unlimited_audio::SelectConsoleMusicBank();
+    if (settingsPath[0] && GetPrivateProfileIntW(L"Graphics", L"XenonEffects", 0, settingsPath) == 1) {
+        unlimited_textures::OpenXbox(settingsPath);
+    }
+    if (LogFile log; log.file)
+        std::fprintf(log.file, "Pathfinder soundtrack bank: %s; console material entries=%u; console vault opened=%ld\n",
+                     consoleMusic ? "Xbox 360" : "PC", unlimited_console::materialCount, unlimited_console::vaultOpened);
     IDirect3D9* factory = nativePassesAtStartup != 9 ? scene_hud::CreateInteropFactory(SystemD3D9(), sdkVersion) : nullptr;
     displayResetInstalled = InstallGameDisplayReset();
     if (displayResetInstalled)
@@ -1467,38 +1540,52 @@ extern "C" IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     if (GetEnvironmentVariableW(L"NFSMW_PACE60", mode, 8) == 1 && mode[0] == L'1') frameLimitIndex = 2;
     const DWORD timingMode = GetEnvironmentVariableW(L"NFSMW_TIMING", mode, 8);
     const bool installed = InstallPresentCall();
-    const bool timingInstalled = !(timingMode == 5 && wcscmp(mode, L"stock") == 0) &&
-                                 InstallUncappedTiming(timingMode == 3 && wcscmp(mode, L"120") == 0 ? 120 : 240);
+    const unsigned rate = timingMode == 3 && wcscmp(mode, L"120") == 0 ? 120 : LowThreadBudget() ? 60 : 240;
+    const bool timingInstalled = !(timingMode == 5 && wcscmp(mode, L"stock") == 0) && InstallUncappedTiming(rate);
     const bool frameMenu = installed && timingInstalled && InstallFrameLimitMenu();
     effectsPageInstalled = frameMenu && settingsPath[0] && InstallVideoEffectsPage();
+    InstallVideoNavigation();
     blurIntensityInstalled = InstallMotionBlurIntensity();
     const bool eaTraxRotation = InstallEATraxDefaults();
     shadowHookInstalled = InstallShadowAllocation();
-    const bool displayCaps = InstallDisplayCapabilityHook();
     const bool shadowContinuity = InstallShadowContinuity();
-    const bool reflectionInstalled = InstallReflectionRefresh();
+    const bool reflectionInstalled = !LowThreadBudget() && InstallReflectionRefresh();
     reflectionQualityInstalled = InstallVehicleReflectionQuality();
     const bool adaptiveMirror = InstallAdaptiveRearviewMirror();
+    const auto mirrorDraw = unlimited_console::rendererBase
+        ? reinterpret_cast<MirrorDraw>(unlimited_console::rendererBase + 0x2f2c0)
+        : GameFunction<MirrorDraw>(0x2d1260);
+    const bool responsiveMirror = aspectHookInstalled && InstallResponsiveMirrorComposition(mirrorDraw);
+    const bool rearviewCameras = InstallRearviewCameraVisibility();
+    rearviewEffectsInstalled = InstallRearviewEffects();
     const bool carDetail = InstallImprovedCarDetail();
     const bool fontScaling = InstallFontAtlasScaling();
     const bool cursorScaling = InstallHdCursorScale();
     const bool filtering = InstallTextureFiltering();
     const bool textureUpload = InstallFullSizeTextureUpload();
+    unlimited_textures::installed = textureUpload && unlimited_textures::remaster.count != 0;
+    if (textureUpload) unlimited_textures::InstallEffectDemandHook();
+    if (LogFile log; log.file)
+        std::fprintf(log.file, "Texture quality: profile=%u entries=%u console_entries=%u upload=%u\n",
+                     static_cast<unsigned>(unlimited_textures::startup), unlimited_textures::remaster.count,
+                     unlimited_textures::console.count, textureUpload);
     const bool reflectedLights = InstallRestoredReflectionLights();
     const char* xenonEffects = LoadOptionalXenonEffects();
     if (LogFile log; log.file)
-        std::fprintf(log.file, "Advanced graphics: effects_page=%u motion_blur_intensity=%u render_scale=%u%% ea_trax_defaults=%u\n",
-                     effectsPageInstalled, blurIntensityInstalled, renderScaleTenths * 10, eaTraxRotation);
+        std::fprintf(log.file, "Advanced graphics: effects_page=%u motion_blur_intensity=%u render_scale=%u%% ea_trax_defaults=%u threads=%u\n",
+                     effectsPageInstalled, blurIntensityInstalled, renderScaleTenths * 10, eaTraxRotation, availableThreads);
     xenonStartup = xenonPreference = settingsPath[0] &&
         GetPrivateProfileIntW(L"Graphics", L"XenonEffects", 0, settingsPath) == 1;
     xenonUnavailable = xenonStartup && std::strcmp(xenonEffects, "enabled") != 0 &&
                        std::strcmp(xenonEffects, "already loaded") != 0;
     if (LogFile log; log.file) {
-        std::fprintf(log.file, "Unlimited scene: dx12_shadow_list=%u\n", shadowNative);
+        std::fprintf(log.file, "Unlimited scene: dx12_shadow_list=%u rearview_effects=%u rearview_mode=%u rearview_cameras=%u rearview_layout=%u\n",
+                     shadowNative, rearviewEffectsInstalled, static_cast<unsigned>(rearviewEffects),
+                     rearviewCameras, responsiveMirror);
         std::fprintf(log.file, "Unlimited UI: artwork=game_textures instruments=game language_selector_layout=%u hd_cursor=%u splash_brand=%u song_notice_anchors=%u\n",
                      optionLayout, cursorScaling, splashBrand, responsiveSongNotice);
         std::fprintf(log.file, "\nSession pid=%lu frame_limit=%u graphics_menu=%s present_call=%s sim_step=%uHz timing=%s shadows=%s shadow_continuity=%s cube_reflections=%s font_atlas=%s filtering=%s\n",
-                     GetCurrentProcessId(), frameLimits[frameLimitIndex], frameMenu ? "FPS option" : "stock",
+                     GetCurrentProcessId(), EffectiveFrameLimit(), frameMenu ? "FPS option" : "stock",
                      installed ? "verified" : "unmodified",
                      simulationRate, timingInstalled ? "decoupled" : "stock",
                      shadowHookInstalled ? "adaptive" : "unmodified", shadowContinuity ? "enabled" : "unmodified",

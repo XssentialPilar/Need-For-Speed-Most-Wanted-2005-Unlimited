@@ -8,6 +8,11 @@ static const UCHAR supported_hash[32] = {
     0x50, 0x4c, 0x26, 0x33, 0x99, 0xd2, 0x03, 0xa2, 0x38, 0x76, 0x9c, 0xff, 0xde, 0x1d, 0x25, 0x3c
 };
 
+static const UCHAR large_address_hash[32] = {
+    0xbd, 0xe1, 0x2b, 0xdd, 0x15, 0x8b, 0x7f, 0x86, 0x10, 0x78, 0xad, 0x45, 0x27, 0xf5, 0xa6, 0x56,
+    0xf3, 0x4c, 0x60, 0x68, 0xe4, 0xa2, 0x12, 0x0f, 0x28, 0x04, 0x4f, 0x92, 0xf0, 0xfa, 0x15, 0x8c
+};
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     (void)instance;
     (void)reason;
@@ -15,7 +20,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     return TRUE;
 }
 
-static BOOL matches_game(HANDLE file) {
+static DWORD game_image(HANDLE file) {
     LARGE_INTEGER size;
     if (!GetFileSizeEx(file, &size) || size.QuadPart != 6029312) return FALSE;
     BCRYPT_ALG_HANDLE algorithm = NULL;
@@ -24,7 +29,7 @@ static BOOL matches_game(HANDLE file) {
     UCHAR *buffer = NULL;
     DWORD storage_size = 0, written = 0;
     UCHAR digest[32];
-    BOOL matches = FALSE;
+    DWORD matches = 0;
     const DWORD block_size = 65536;
     if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) < 0 ||
         BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, (PUCHAR)&storage_size,
@@ -40,9 +45,12 @@ static BOOL matches_game(HANDLE file) {
         remaining -= count;
     }
     if (BCryptFinishHash(hash, digest, sizeof(digest), 0) < 0) goto cleanup;
-    UCHAR difference = 0;
-    for (unsigned i = 0; i < sizeof(supported_hash); ++i) difference |= digest[i] ^ supported_hash[i];
-    matches = difference == 0;
+    UCHAR original_difference = 0, large_difference = 0;
+    for (unsigned i = 0; i < sizeof(supported_hash); ++i) {
+        original_difference |= digest[i] ^ supported_hash[i];
+        large_difference |= digest[i] ^ large_address_hash[i];
+    }
+    matches = !original_difference ? 1 : !large_difference ? 2 : 0;
 cleanup:
     if (hash) BCryptDestroyHash(hash);
     if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
@@ -95,7 +103,7 @@ DWORD WINAPI VerifyGameDirectory(const wchar_t *directory) {
         if (GetLastError() == ERROR_SHARING_VIOLATION) result = 2;
         goto done;
     }
-    const BOOL compatible = matches_game(file);
+    const DWORD compatible = game_image(file);
     CloseHandle(file);
     if (!compatible || !append(path, capacity, length, L"\\TRACKS")) goto done;
     const DWORD tracks = GetFileAttributesW(path);
@@ -115,6 +123,29 @@ done:
 static BOOL read_exact(HANDLE file, void *data, DWORD size) {
     DWORD bytes;
     return ReadFile(file, data, size, &bytes, NULL) && bytes == size;
+}
+
+BOOL WINAPI EnableLargeAddressCopy(const wchar_t *path) {
+    HANDLE file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return FALSE;
+    LARGE_INTEGER position;
+    position.QuadPart = 0x11e; // COFF Characteristics in the verified PC 1.3 image
+    WORD characteristics;
+    DWORD written = 0;
+    BOOL ok = game_image(file) == 1 &&
+              SetFilePointerEx(file, position, NULL, FILE_BEGIN) &&
+              read_exact(file, &characteristics, sizeof(characteristics));
+    if (ok) {
+        characteristics |= IMAGE_FILE_LARGE_ADDRESS_AWARE;
+        position.QuadPart = 0x11e;
+        ok = SetFilePointerEx(file, position, NULL, FILE_BEGIN) &&
+             WriteFile(file, &characteristics, sizeof(characteristics), &written, NULL) &&
+             written == sizeof(characteristics) && FlushFileBuffers(file);
+    }
+    position.QuadPart = 0;
+    ok = ok && SetFilePointerEx(file, position, NULL, FILE_BEGIN) && game_image(file) == 2;
+    CloseHandle(file);
+    return ok;
 }
 
 static BOOL valid_hd_movie(HANDLE file, BOOL pal) {

@@ -42,6 +42,16 @@ float OptionValueHalfWidth(const char* package, unsigned index, float origin) {
     return std::min(origin-a-ra,b-rb-origin) - 2;
 }
 
+void AlignOptionLabel(D3DMATRIX& matrix, const char* package, void* label, float parentScale) {
+    auto* first = FindHudObject(package, firstOptionName);
+    if (!first || first == label || HudField<unsigned>(first, 0x18) != 2 ||
+        !HudField<void*>(first, 0x2c)) return;
+    // Several native widgets move their titles by a fraction of the string
+    // width when positioned. Keep the original label column for every row.
+    const float offset = ReadHudPosition(first).x - ReadHudPosition(label).x;
+    if (std::isfinite(offset) && std::fabs(offset) <= 160.0f) matrix._41 += offset * parentScale;
+}
+
 bool FitOptionText(D3DMATRIX& transform, OptionPlate& plate, const AspectLayout& aspect,
                    bool value, unsigned format, float naturalWidth, float fontHeight,
                    float parentScale, float nativeHalfWidth) {
@@ -63,7 +73,7 @@ bool FitOptionText(D3DMATRIX& transform, OptionPlate& plate, const AspectLayout&
     const float center = transform._42 + alignment*lineHeight;
     const float halfHeight = 11.5f*parentScale;
     if (center-halfHeight < 240-viewHalfHeight+yInset || center+halfHeight > 240+viewHalfHeight-yInset) return false;
-    const float size = std::min({transform._22, available/naturalWidth,20.0f*parentScale/fontHeight});
+    const float size = std::min({transform._22, available/naturalWidth, 22.0f*parentScale/fontHeight});
     if (!std::isfinite(size) || !(size > 0)) return false;
     transform._11 = transform._22 = size;
     transform._42 = center - alignment*fontHeight*size;
@@ -165,9 +175,11 @@ void __fastcall RenderResponsiveOption(void* font, void*, const OptionColor& col
                 }
                 const float width = measure(font,text,HudField<unsigned>(object,0x1c),0,false);
                 const float half = value ? OptionValueHalfWidth(name,row,ReadHudPosition(object).x) : 0;
+                const float parentScale = source->_22 / scale;
                 fitted = *source;
+                if (!value) AlignOptionLabel(fitted, name, object, parentScale);
                 OptionPlate plate{};
-                if (FitOptionText(fitted,plate,activeLayout,value,format,width,HudField<float>(font,0x24),source->_22/scale,half)) {
+                if (FitOptionText(fitted,plate,activeLayout,value,format,width,HudField<float>(font,0x24),parentScale,half)) {
                     drawMatrix = &fitted;
                     const auto* category = unlimited_language::CategoryIndex();
                     if (value && row == 0 && !_stricmp(name,"Options.fng") &&

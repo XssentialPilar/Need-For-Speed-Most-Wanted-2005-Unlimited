@@ -21,13 +21,4 @@ for name, symbol in [
     for start in range(0, len(alpha), 32):
         rows.append("    " + ", ".join(str(x) for x in alpha[start:start+32]) + ",")
     rows.extend(["};", ""])
-svg = (artwork / "discx-tab.svg").read_text(encoding="utf-8")
-png = resvg_py.svg_to_bytes(svg_string=svg, width=512, height=512)
-with Image.open(BytesIO(bytes(png))) as frame:
-    rgba = frame.convert("RGBA").resize((128, 128), Image.Resampling.LANCZOS).tobytes()
-    color = [f"0x{a:02x}{r:02x}{g:02x}{b:02x}" for r, g, b, a in zip(rgba[::4], rgba[1::4], rgba[2::4], rgba[3::4])]
-rows.append("static constexpr uint32_t discxTabArgb[] = {")
-for start in range(0, len(color), 12):
-    rows.append("    " + ", ".join(color[start:start+12]) + ",")
-rows.extend(["};", ""])
 (artwork / "menu_icons_alpha.inc").write_text("\n".join(rows), encoding="utf-8")

@@ -1,3 +1,4 @@
 EXPORTS
     VerifyGameDirectory=VerifyGameDirectory@4
     VerifyReplacementMovie=VerifyReplacementMovie@8
+    EnableLargeAddressCopy=EnableLargeAddressCopy@4

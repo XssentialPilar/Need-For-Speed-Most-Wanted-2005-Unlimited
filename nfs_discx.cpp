@@ -48,7 +48,9 @@ struct Decoder {
     explicit Decoder(const fs::path& folder) {
         if (folder.empty()) return;
         const auto dll = folder / L"UnlimitedCommunity" / L"Discx" / L"UnlimitedDiscx.dll";
-        module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!module && GetLastError() == ERROR_INVALID_PARAMETER)
+            module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
         ready = module && LoadProc(module, open, "DiscCX_Open") && LoadProc(module, read, "DiscCX_Read") &&
             LoadProc(module, seek, "DiscCX_Seek") && LoadProc(module, close, "DiscCX_Close");
         if (module) {

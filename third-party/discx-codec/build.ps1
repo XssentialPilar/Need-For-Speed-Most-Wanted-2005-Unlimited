@@ -34,9 +34,8 @@ function ConvertTo-MsysPath([string]$Path) {
 
 [void][IO.Directory]::CreateDirectory($Cache)
 Get-VerifiedArchive $archive "https://ffmpeg.org/releases/$sourceName" 'D4FCB164028DD3BEEE5D92C0AC72E46AAC6973C75EA12DC14DE07BF8F407370A'
-$dllNames = @('avformat-60.dll', 'avcodec-60.dll', 'swresample-4.dll', 'avutil-58.dll')
-$missing = for ($i = 0; $i -lt $libraryNames.Count; ++$i) {
-    if (!(Test-Path -LiteralPath (Join-Path $root "$($libraryNames[$i])/$($dllNames[$i])"))) { $dllNames[$i] }
+$missing = foreach ($lib in $libraryNames) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root "$lib/$lib.a"))) { $lib }
 }
 if ($missing -or !(Test-Path -LiteralPath $stamp) -or (Get-Content -LiteralPath $stamp -Raw).Trim() -ne $recipeHash) {
     if (!(Test-Path -LiteralPath (Join-Path $root 'configure'))) {
@@ -70,13 +69,9 @@ if ($missing -or !(Test-Path -LiteralPath $stamp) -or (Get-Content -LiteralPath 
 $dir = Join-Path $Destination 'Discx'
 $sourceDir = Join-Path $dir 'Source'
 [void][IO.Directory]::CreateDirectory($sourceDir)
-$libs = for ($i = 0; $i -lt $libraryNames.Count; ++$i) {
-    $lib = $libraryNames[$i]
-    Copy-Item -LiteralPath (Join-Path $root "$lib/$($dllNames[$i])") -Destination $dir -Force
-    Join-Path $root "$lib/$lib.dll.a"
-}
-& i686-w64-mingw32-clang++.exe -std=c++17 -Wall -Wextra -Werror -O2 -shared -static -idirafter $root (Join-Path $PSScriptRoot 'codec.cpp') @libs -o (Join-Path $dir 'UnlimitedDiscx.dll')
+$libs = foreach ($lib in $libraryNames) { Join-Path $root "$lib/$lib.a" }
+& i686-w64-mingw32-clang++.exe -std=c++17 -Wall -Wextra -Werror -O2 -shared -static -idirafter $root (Join-Path $PSScriptRoot 'codec.cpp') '-Wl,--start-group' @libs '-Wl,--end-group' -lbcrypt -lws2_32 -lsecur32 -o (Join-Path $dir 'UnlimitedDiscx.dll')
 if ($LASTEXITCODE) { throw "Discx decoder compilation failed ($LASTEXITCODE)" }
-Copy-Item -LiteralPath $archive, $recipe -Destination $sourceDir -Force
+Copy-Item -LiteralPath $PSCommandPath, (Join-Path $PSScriptRoot 'codec.cpp'), (Join-Path $PSScriptRoot 'codec.hpp'), $archive, $recipe -Destination $sourceDir -Force
 Copy-Item -LiteralPath (Join-Path $root 'COPYING.LGPLv2.1') -Destination (Join-Path $dir 'FFmpeg-LGPL-2.1.txt') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $dir 'FFmpeg-Notice.md') -Force

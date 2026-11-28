@@ -1,6 +1,7 @@
 /Juego/
 /Respaldo antes de Upscaled HUD/
 /dist/
+/8K Remade Textures V2.01.7z
 *.dll
 *.exe
 *.dll.before-*
@@ -10,3 +11,6 @@
 *.obj
 *.o
 /.vs/
+/Complex Installation/
+__pycache__/
+*.pyc
