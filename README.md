@@ -24,6 +24,8 @@ Unlimited builds on Abdullah374's restoration of the PC split-screen code and hi
 
 Current release **v1.1.0-beta.1**. Setup requires a supported PC 1.3 installation on Windows 7 SP1 or later with x86 application support.
 
+**Simple, all-in-one setup.** The compact and full editions each use a single installer. Select your existing PC 1.3 game folder and Setup checks the executable, installs the patch and game-ready assets for your edition, and supplies the default configuration on a fresh install. The original community archives and conversion tools are used when building from source. After Setup finishes, launch Most Wanted from your usual shortcut.
+
 | Download | Contents |
 | --- | --- |
 | [Compact installer · 501.7 MB](https://github.com/XssentialPilar/Need-For-Speed-Most-Wanted-2005-Unlimited/releases/download/v1.1.0-beta.1/NFSMW-Unlimited-Compact-Setup.exe) | Single installer with the patch, HD interface, local split screen, DISCX, Xbox 360 graphics and engine sounds. It keeps all seven texture settings and uses the available textures. The full edition supplies the 8K remaster and Xbox 360 soundtrack. |
